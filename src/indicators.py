@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date
 
 import pandas as pd
@@ -167,3 +168,81 @@ def calc_rsi(kline: pd.DataFrame | None, period: int = 14) -> float | None:
         return 0.0
     rs = avg_gain / avg_loss
     return float(100.0 - 100.0 / (1.0 + rs))
+
+
+# ---------------------------------------------------------------------------
+# 基金指标（基金历史帧规范列：date（datetime64，升序）、close（float）；
+# 指数 PE 帧规范列：date、pe（float，升序）；基金分红帧仅需 date 列）
+# ---------------------------------------------------------------------------
+
+
+def calc_fund_discount(price: float | None, nav: float | None) -> float | None:
+    """场内价格相对净值的折溢价率（%）= (price - nav) / nav × 100；负值=折价。
+
+    price 或 nav 缺失、nav 为 0 → None。
+    """
+    if price is None or nav is None or nav == 0:
+        return None
+    return (price - nav) / nav * 100.0
+
+
+def calc_nav_trend(history: pd.DataFrame | None, days: int = 20) -> float | None:
+    """近 days 期净值变化率（%）= (最新净值 - days 期前净值) / days 期前净值 × 100。
+
+    history 为 None 或不足 days+1 行 → None；基准净值为 0 → None。
+    """
+    if history is None or len(history) < days + 1:
+        return None
+    closes = history["close"]
+    base = float(closes.iloc[-(days + 1)])
+    if base == 0:
+        return None
+    return (float(closes.iloc[-1]) - base) / base * 100.0
+
+
+def calc_index_pe_position(
+    pe_history: pd.DataFrame | None, column: str = "pe"
+) -> float | None:
+    """指数最新 PE 在历史区间内的近似分位（%）= (last - min) / (max - min) × 100。
+
+    pe_history 为 None、不足 2 行或 max == min → None；结果截断到 0-100。
+    """
+    if pe_history is None or len(pe_history) < 2:
+        return None
+    values = pe_history[column].astype(float)
+    lowest = float(values.min())
+    highest = float(values.max())
+    if highest == lowest:
+        return None
+    position = (float(values.iloc[-1]) - lowest) / (highest - lowest) * 100.0
+    return min(100.0, max(0.0, position))
+
+
+def calc_dividend_frequency(
+    dividend_data: pd.DataFrame | None,
+    as_of: date,
+    window_days: int = 365,
+) -> int | None:
+    """近 window_days 天的分红次数。
+
+    None（获取失败）→ None；空帧（无分红）→ 0。
+    """
+    if dividend_data is None:
+        return None
+    cutoff = pd.Timestamp(as_of) - pd.Timedelta(days=window_days)
+    return int((dividend_data["date"] > cutoff).sum())
+
+
+def calc_fund_size(scale: str | None) -> float | None:
+    """解析净资产规模字符串为亿元数值。
+
+    ``"222.76亿元（截止至：2026年06月30日）"`` → 222.76；
+    ``"5000万元（…）"`` → 0.5；None、"---" 或无「数字+亿/万」单位 → None。
+    """
+    if scale is None:
+        return None
+    match = re.match(r"\s*(\d+(?:\.\d+)?)\s*(亿|万)", str(scale))
+    if match is None:
+        return None
+    amount = float(match.group(1))
+    return amount / 10000.0 if match.group(2) == "万" else amount
