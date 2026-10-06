@@ -2,11 +2,14 @@
 stocks:
   indicators:
     dividend_yield:
-      weight: 30
+      weight: 25
       thresholds: { high: 4.0, mid: 2.0 }
     dividend_years:
-      weight: 20
+      weight: 15
       thresholds: { high: 5, mid: 3 }
+    dividend_trend:
+      weight: 10
+      thresholds: { high: 0, mid: -30 }   # 近 3 年 vs 前 3 年分红变化率（%）: ≥0/≥-30/更差
     payout_ratio:
       weight: 10
       thresholds: { min: 20, max: 70 }
@@ -22,6 +25,18 @@ stocks:
     momentum_5d:
       weight: 5
       thresholds: { oversold: -10, overbought: 10 }
+
+  # 财报红标对总分的扣减（%）：盈利下滑 / 经营现金流为负 / 分红超现金流，封顶 30%
+  sustainability:
+    eps_decline_penalty: 10
+    negative_cash_penalty: 15
+    cash_cover_penalty: 10
+    max_penalty: 30
+
+  # 风险列提示阈值（只标注、不影响分数）
+  risk_hints:
+    volatility_high: 35      # 年化波动率 ≥ 该值（%）→ 风险列提示
+    turnover_low: 5000       # 近 60 日均成交额 < 该值（万元）→ 风险列提示
 
 # 基金评分指标权重与阈值（权重总和 100）
 funds:

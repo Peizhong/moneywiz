@@ -8,7 +8,11 @@ import logging
 
 import pytest
 
-from src.scorer import normalize, score_instrument
+from src.scorer import (
+    apply_sustainability_penalty,
+    normalize,
+    score_instrument,
+)
 
 # 与 config/rules.yaml 一致的档位阈值
 YIELD_TH = {"high": 4.0, "mid": 2.0}
@@ -145,3 +149,57 @@ def test_score_instrument_unknown_indicator_warns_and_is_missing(caplog):
         record.levelno == logging.WARNING and "mystery" in record.getMessage()
         for record in caplog.records
     )
+
+
+# ---------------------------------------------------------------------------
+# 分红可持续性扣分（P1）
+# ---------------------------------------------------------------------------
+
+PENALTY_CFG = {
+    "eps_decline_penalty": 10.0,
+    "negative_cash_penalty": 15.0,
+    "cash_cover_penalty": 10.0,
+    "max_penalty": 30.0,
+}
+
+
+def test_dividend_trend_tier_uses_higher_better():
+    assert normalize("dividend_trend", 0.0, {"high": 0, "mid": -30}) == 1.0
+    assert normalize("dividend_trend", -10.0, {"high": 0, "mid": -30}) == 0.5
+    assert normalize("dividend_trend", -40.0, {"high": 0, "mid": -30}) == 0.0
+
+
+def test_penalty_single_flags():
+    clean = {"eps_growth": 5.0, "op_cash_per_share": 2.0, "cash_cover": 50.0}
+    assert apply_sustainability_penalty(80.0, clean, PENALTY_CFG) == (80.0, 0.0)
+
+    declined = {"eps_growth": -5.0, "op_cash_per_share": 2.0, "cash_cover": 50.0}
+    assert apply_sustainability_penalty(80.0, declined, PENALTY_CFG) == (72.0, 10.0)
+
+    over_cover = {"eps_growth": 5.0, "op_cash_per_share": 0.5, "cash_cover": 200.0}
+    assert apply_sustainability_penalty(80.0, over_cover, PENALTY_CFG) == (72.0, 10.0)
+
+    negative_cash = {"eps_growth": 5.0, "op_cash_per_share": -0.1, "cash_cover": None}
+    assert apply_sustainability_penalty(80.0, negative_cash, PENALTY_CFG) == (68.0, 15.0)
+
+
+def test_penalty_cash_rules_are_exclusive_and_capped():
+    # 现金流为负优先于分红超现金流（不重复计）
+    both = {"eps_growth": -5.0, "op_cash_per_share": -0.1, "cash_cover": 200.0}
+    total, penalty = apply_sustainability_penalty(80.0, both, PENALTY_CFG)
+    assert penalty == 25.0  # 10（盈利下滑）+ 15（现金流为负）
+    assert total == pytest.approx(60.0)
+
+
+def test_penalty_cap_and_defaults():
+    cfg = dict(PENALTY_CFG, eps_decline_penalty=20.0, negative_cash_penalty=20.0)
+    total, penalty = apply_sustainability_penalty(
+        80.0, {"eps_growth": -5.0, "op_cash_per_share": -0.1}, cfg
+    )
+    assert penalty == 30.0  # 封顶
+    assert total == pytest.approx(56.0)
+
+    # 未提供配置 → 用默认值；total/警示缺失 → 原样返回
+    assert apply_sustainability_penalty(80.0, {"eps_growth": -5.0}, None) == (72.0, 10.0)
+    assert apply_sustainability_penalty(None, {"eps_growth": -5.0}, PENALTY_CFG) == (None, 0.0)
+    assert apply_sustainability_penalty(80.0, None, PENALTY_CFG) == (80.0, 0.0)

@@ -17,6 +17,7 @@ from tabulate import tabulate
 INDICATOR_LABELS: dict[str, str] = {
     "dividend_yield": "股息率",
     "dividend_years": "连续分红",
+    "dividend_trend": "分红趋势",
     "payout_ratio": "派息率",
     "pe_vs_industry": "PE估值",
     "pb_vs_industry": "PB估值",
@@ -33,6 +34,7 @@ INDICATOR_LABELS: dict[str, str] = {
 INDICATOR_VALUE_FORMATS: dict[str, str] = {
     "dividend_yield": "{:.1f}%",
     "dividend_years": "{:.0f}年",
+    "dividend_trend": "{:+.0f}%",
     "payout_ratio": "{:.0f}%",
     "pe_vs_industry": "{:+.0f}%",
     "pb_vs_industry": "{:+.0f}%",
@@ -48,6 +50,10 @@ INDICATOR_VALUE_FORMATS: dict[str, str] = {
 # 120 日区间分位（calc_price_position）并入亮点/风险的阈值
 POSITION_LOW = 30.0
 POSITION_HIGH = 70.0
+
+# 风险提示默认阈值（rules.yaml 的 stocks.risk_hints 可覆盖）
+VOLATILITY_HIGH_DEFAULT = 35.0  # 年化波动率 ≥ 该值（%）→ 提示
+TURNOVER_LOW_DEFAULT = 5000.0  # 近 60 日均成交额 < 该值（万元）→ 提示
 
 STOCK_HEADER = "【股票】"
 FUND_HEADER = "【基金】"
@@ -79,6 +85,7 @@ def render_report(
     output_cfg: dict,
     elapsed_s: float,
     market: dict | None = None,
+    risk_hints: dict | None = None,
 ) -> str:
     """渲染完整报告：板块温度计（可选）、股票表、基金表、摘要行，以换行连接。"""
     all_results = (*stock_results, *fund_results)
@@ -100,7 +107,7 @@ def render_report(
     blocks.extend(
         [
             STOCK_HEADER,
-            _table(stock_results, output_cfg),
+            _table(stock_results, output_cfg, risk_hints),
             FUND_HEADER,
             _table(fund_results, output_cfg),
             summary,
@@ -126,7 +133,7 @@ def _market_text(market: dict) -> str:
     return f"【板块温度计】{'，'.join(parts)}" if parts else ""
 
 
-def _table(results: list[dict], output_cfg: dict) -> str:
+def _table(results: list[dict], output_cfg: dict, risk_hints: dict | None = None) -> str:
     """把一张表渲染成 tabulate 文本；无标的时给出占位符。"""
     if not results:
         return EMPTY_SECTION
@@ -162,7 +169,13 @@ def _table(results: list[dict], output_cfg: dict) -> str:
                     has_score,
                 ),
                 _detail_text(scores, values, 1.0, low_phrase),
-                _risk_text(scores, values, item.get("sustainability"), high_phrase),
+                _risk_text(
+                    scores,
+                    values,
+                    item.get("sustainability"),
+                    high_phrase,
+                    _risk_hint_phrases(item, risk_hints),
+                ),
                 _tech_text(item.get("tech")),
             ]
         )
@@ -240,14 +253,19 @@ def _format_detail(name: str, value) -> str:
 
 
 def _risk_text(
-    scores: dict, values: dict, sustainability: dict | None, high_phrase: str | None
+    scores: dict,
+    values: dict,
+    sustainability: dict | None,
+    high_phrase: str | None,
+    hint_phrases: list[str] | None = None,
 ) -> str:
-    """风险列：可持续性警示（P1）优先，其后高位提示与零分档指标，最多 3 项。
+    """风险列：可持续性警示优先，其后波动/流动性提示、高位提示与零分档指标，最多 4 项。
 
     可持续性警示是财报硬事实（盈利下滑/现金流为负/分红超现金流），比分数档位
     更值得占用有限的展示空间；无任何内容时为 ``-``。
     """
     items = _sustainability_phrases(sustainability)
+    items.extend(hint_phrases or [])
     if high_phrase:
         items.append(high_phrase)
     items.extend(
@@ -255,7 +273,27 @@ def _risk_text(
         for name, tier in scores.items()
         if tier == 0.0
     )
-    return "、".join(items[:3]) if items else "-"
+    return "、".join(items[:4]) if items else "-"
+
+
+def _risk_hint_phrases(item: dict, risk_hints: dict | None) -> list[str]:
+    """波动率/流动性提示（只标注，不影响分数）：超阈值才出现。"""
+    hints = risk_hints or {}
+    volatility_high = float(hints.get("volatility_high", VOLATILITY_HIGH_DEFAULT))
+    turnover_low = float(hints.get("turnover_low", TURNOVER_LOW_DEFAULT))
+    phrases = []
+    volatility = item.get("volatility")
+    if volatility is not None and float(volatility) >= volatility_high:
+        phrases.append(f"波动率 {float(volatility):.0f}%")
+    turnover = item.get("turnover_wan")
+    if turnover is not None and float(turnover) < turnover_low:
+        phrases.append(f"日均成交 {_amount_text(float(turnover))}")
+    return phrases
+
+
+def _amount_text(wan: float) -> str:
+    """万元金额的紧凑显示：不足 1 亿显示 ``X万``，否则 ``X.X亿``。"""
+    return f"{wan:.0f}万" if wan < 10000 else f"{wan / 10000:.1f}亿"
 
 
 def _sustainability_phrases(sustainability: dict | None) -> list[str]:

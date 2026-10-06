@@ -70,6 +70,7 @@ _TIERS: dict[str, Tier] = {
     "dividend_yield": _higher_better,
     "dividend_years": _higher_better,
     "dividend_frequency": _higher_better,
+    "dividend_trend": _higher_better,  # 阈值 {high: 0, mid: -30}：分红下降越大分越低
     "payout_ratio": _range,
     "pe_vs_industry": _two_sided("discount", "premium"),
     "pb_vs_industry": _two_sided("discount", "premium"),
@@ -79,6 +80,14 @@ _TIERS: dict[str, Tier] = {
     "ma60_position": _sweet_band,
     "index_pe_vs_history": _two_sided("low", "high"),
     "fund_size": _at_least_min,
+}
+
+# 分红可持续性红标的默认扣分（可在 rules.yaml 的 stocks.sustainability 覆盖）
+DEFAULT_SUSTAINABILITY_PENALTY = {
+    "eps_decline_penalty": 10.0,  # 净利润增长率 < 0
+    "negative_cash_penalty": 15.0,  # 每股经营性现金流 ≤ 0
+    "cash_cover_penalty": 10.0,  # 近 12 个月分红 ÷ 经营现金流 > 100%
+    "max_penalty": 30.0,  # 合计封顶
 }
 
 
@@ -123,3 +132,31 @@ def score_instrument(
 
     total = round(weighted / scored_weight * 100, 1) if scored_weight else None
     return {"scores": scores, "total": total, "missing": missing}
+
+
+def apply_sustainability_penalty(
+    total: float | None, sustainability: dict | None, config: dict | None = None
+) -> tuple[float | None, float]:
+    """按财报红标对总分扣分；返回 ``(调整后总分, 实际扣减百分比)``。
+
+    红标：盈利下滑（净利润增长率 < 0）、经营现金流为负、分红超现金流（>100%；
+    与经营现金流为负互斥，前者优先）。扣减为总分的百分比并受 ``max_penalty`` 封顶。
+    ``total`` 为 None 或数据缺失 → 原样返回（0 扣减）。
+    """
+    if total is None or not sustainability:
+        return total, 0.0
+    cfg = {**DEFAULT_SUSTAINABILITY_PENALTY, **(config or {})}
+    penalty = 0.0
+    eps_growth = sustainability.get("eps_growth")
+    if eps_growth is not None and float(eps_growth) < 0:
+        penalty += float(cfg["eps_decline_penalty"])
+    op_cash = sustainability.get("op_cash_per_share")
+    cash_cover = sustainability.get("cash_cover")
+    if op_cash is not None and float(op_cash) <= 0:
+        penalty += float(cfg["negative_cash_penalty"])
+    elif cash_cover is not None and float(cash_cover) > 100:
+        penalty += float(cfg["cash_cover_penalty"])
+    penalty = min(penalty, float(cfg["max_penalty"]))
+    if penalty <= 0:
+        return total, 0.0
+    return round(total * (1 - penalty / 100.0), 1), penalty

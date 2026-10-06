@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from datetime import date
 
@@ -27,6 +28,34 @@ def calc_dividend_yield(
     cutoff = pd.Timestamp(as_of) - pd.Timedelta(days=window_days)
     in_window = dividend_data.loc[dividend_data["date"] > cutoff, "dividend_per_share"]
     return float(in_window.sum()) / price * 100.0
+
+
+def calc_dividend_trend(
+    dividend_data: pd.DataFrame | None, as_of: date, years: int = 3
+) -> float | None:
+    """近 ``years`` 个年度 vs 前 ``years`` 个年度的每股分红合计变化率（%）。
+
+    年度按除权除息日所在日历年统计。前段合计为 0 时：近段有分红 → 100（视为增长，
+    如新分红公司）；两段都为 0 或无任何分红 → None（不可评分）；获取失败 → None。
+    """
+    if dividend_data is None or dividend_data.empty:
+        return None
+    year_series = dividend_data["date"].dt.year
+    recent = float(
+        dividend_data.loc[
+            year_series.between(as_of.year - years + 1, as_of.year),
+            "dividend_per_share",
+        ].sum()
+    )
+    previous = float(
+        dividend_data.loc[
+            year_series.between(as_of.year - 2 * years + 1, as_of.year - years),
+            "dividend_per_share",
+        ].sum()
+    )
+    if previous == 0:
+        return 100.0 if recent > 0 else None
+    return (recent - previous) / previous * 100.0
 
 
 def calc_ttm_dividend_per_share(
@@ -203,6 +232,38 @@ def calc_price_position(kline: pd.DataFrame | None) -> float | None:
         return None
     position = (float(closes.iloc[-1]) - lowest) / (highest - lowest) * 100
     return min(100.0, max(0.0, position))
+
+
+def calc_volatility(kline: pd.DataFrame | None, trading_days: int = 244) -> float | None:
+    """收盘价日收益率标准差 × √trading_days（年化波动率，%）。
+
+    不足 30 行有效收盘价 → None。
+    """
+    if kline is None or len(kline) < 30:
+        return None
+    closes = pd.to_numeric(kline["close"], errors="coerce").dropna()
+    if len(closes) < 30:
+        return None
+    returns = closes.pct_change().dropna()
+    if returns.empty:
+        return None
+    return float(returns.std(ddof=1) * math.sqrt(trading_days) * 100.0)
+
+
+def calc_turnover_amount(kline: pd.DataFrame | None, days: int = 60) -> float | None:
+    """近 ``days`` 日成交额中位数（万元；成交量按"手"×100×收盘价估算）。
+
+    无 ``volume`` 列或有效行不足 5 → None。
+    """
+    if kline is None or kline.empty or "volume" not in kline.columns:
+        return None
+    window = kline.tail(days)
+    close = pd.to_numeric(window["close"], errors="coerce")
+    volume = pd.to_numeric(window["volume"], errors="coerce")
+    amounts = (close * volume * 100.0).dropna()  # 手 → 股，乘以价格得元
+    if len(amounts) < 5:
+        return None
+    return float(amounts.median()) / 10000.0
 
 
 # ---------------------------------------------------------------------------

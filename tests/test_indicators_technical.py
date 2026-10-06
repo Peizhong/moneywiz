@@ -14,6 +14,8 @@ from src.indicators import (
     calc_momentum_5d,
     calc_price_position,
     calc_rsi,
+    calc_turnover_amount,
+    calc_volatility,
 )
 
 
@@ -144,3 +146,46 @@ def test_price_position_invalid_inputs_return_none():
     assert calc_price_position(None) is None
     assert calc_price_position(_kline_frame([10.0])) is None  # 不足 2 行
     assert calc_price_position(_kline_frame([10.0, 10.0, 10.0])) is None  # 全平
+
+
+def test_volatility_of_flat_series_is_zero():
+    frame = _kline_frame([10.0] * 40)
+    assert calc_volatility(frame) == pytest.approx(0.0)
+
+
+def test_volatility_is_annualized_std_of_returns():
+    # 收益率序列已知：+1% / -1% 交替 → 日标准差可复算，年化 × √244
+    closes = [100.0]
+    for index in range(59):
+        closes.append(closes[-1] * (1.01 if index % 2 == 0 else 0.99))
+    frame = _kline_frame(closes)
+    returns = frame["close"].pct_change().dropna()
+    expected = returns.std(ddof=1) * (244**0.5) * 100
+    assert calc_volatility(frame) == pytest.approx(expected)
+
+
+def test_volatility_insufficient_rows_return_none():
+    assert calc_volatility(None) is None
+    assert calc_volatility(_kline_frame([10.0] * 29)) is None
+
+
+def test_turnover_amount_is_median_volume_times_close_in_wan():
+    # 成交量单位：手（×100 = 股）；成交额中位数换算成万元
+    frame = pd.DataFrame(
+        {
+            "date": pd.date_range("2026-01-01", periods=6, freq="D"),
+            "close": [10.0, 10.0, 10.0, 20.0, 10.0, 10.0],
+            "volume": [1000, 2000, 3000, 1000, 5000, 6000],  # 手
+        }
+    )
+    # 成交额（元）: 1e6, 2e6, 3e6, 2e6, 5e6, 6e6 → 中位数 (3e6+2e6)/2 = 2.5e6 → 250 万元
+    assert calc_turnover_amount(frame) == pytest.approx(250.0)
+
+
+def test_turnover_amount_missing_volume_returns_none():
+    assert calc_turnover_amount(None) is None
+    assert calc_turnover_amount(_kline_frame([10.0] * 60)) is None  # 无 volume 列
+    small = pd.DataFrame(
+        {"date": pd.date_range("2026-01-01", periods=3, freq="D"), "close": [1.0] * 3, "volume": [1] * 3}
+    )
+    assert calc_turnover_amount(small) is None  # 不足 5 行

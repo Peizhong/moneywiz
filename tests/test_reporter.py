@@ -369,6 +369,51 @@ def test_sustainability_warnings_join_risk_column():
     assert "分红超现金流 200%" in row
 
 
+def test_dividend_trend_detail_format():
+    from src.reporter import _detail_text
+
+    assert (
+        _detail_text({"dividend_trend": 1.0}, {"dividend_trend": -12.3}, 1.0)
+        == "分红趋势 -12%"
+    )
+    assert (
+        _detail_text({"dividend_trend": 1.0}, {"dividend_trend": 55.0}, 1.0)
+        == "分红趋势 +55%"
+    )
+
+
+def test_risk_hints_for_volatility_and_turnover():
+    result = _result("600036", "招商银行", 70.0, scores={"dividend_yield": 1.0})
+    result["volatility"] = 48.2
+    result["turnover_wan"] = 3200.0
+
+    report = render_report(
+        [result],
+        [],
+        OUTPUT_CFG,
+        1.0,
+        risk_hints={"volatility_high": 35, "turnover_low": 5000},
+    )
+
+    row = _table_rows(report, STOCK_HEADER)[0]
+    assert "波动率 48%" in row
+    assert "日均成交 3200万" in row
+
+
+def test_risk_hints_respect_thresholds_and_large_amount_scale():
+    result = _result("600036", "招商银行", 70.0, scores={"dividend_yield": 1.0})
+    result["volatility"] = 20.0  # 低于阈值 → 不提示
+    result["turnover_wan"] = 15000.0
+
+    report = render_report(
+        [result], [], OUTPUT_CFG, 1.0, risk_hints={"turnover_low": 20000}
+    )
+
+    row = _table_rows(report, STOCK_HEADER)[0]
+    assert "波动率" not in row
+    assert "日均成交 1.5亿" in row  # 大额以亿显示
+
+
 def test_negative_operating_cash_flow_warning():
     result = _result("600015", "华夏银行", 70.0, scores={"dividend_yield": 1.0})
     result["sustainability"] = {

@@ -45,7 +45,7 @@ from src.cache import DEFAULT_TTL_SECONDS, Cache
 logger = logging.getLogger(__name__)
 
 SPOT_COLUMNS = ("code", "name", "price", "pe", "pb")
-KLINE_COLUMNS = ("date", "close")
+KLINE_COLUMNS = ("date", "close", "volume")
 DIVIDEND_COLUMNS = ("date", "dividend_per_share")
 PE_CACHE_FILENAME = "pe_cache.json"
 FINANCIAL_CACHE_FILENAME = "financial_cache.json"
@@ -314,7 +314,8 @@ def _fetch_kline(
     frame = pd.DataFrame(
         {
             "date": pd.to_datetime(raw["日期"]),
-            "close": pd.to_numeric(raw["收盘"], errors="coerce"),
+            "close": pd.to_numeric(raw["收盘"], errors="coerce").astype("float64"),
+            "volume": pd.to_numeric(raw["成交量"], errors="coerce").astype("float64"),
         }
     )
     return (
@@ -351,9 +352,16 @@ def _tencent_kline(code: str, days: int) -> pd.DataFrame | None:
     rows = [row for row in rows if len(row) >= 3]
     if not rows:
         return pd.DataFrame(columns=list(KLINE_COLUMNS))
-    frame = pd.DataFrame({"date": [r[0] for r in rows], "close": [r[2] for r in rows]})
+    frame = pd.DataFrame(
+        {
+            "date": [r[0] for r in rows],
+            "close": [r[2] for r in rows],
+            "volume": [r[5] if len(r) > 5 else None for r in rows],  # 单位：手
+        }
+    )
     frame["date"] = pd.to_datetime(frame["date"])
     frame["close"] = pd.to_numeric(frame["close"], errors="coerce")
+    frame["volume"] = pd.to_numeric(frame["volume"], errors="coerce")
     return (
         frame.sort_values("date")
         .tail(days)

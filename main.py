@@ -43,19 +43,37 @@ def _num(value):
     return value
 
 
-def _result(code, name, values, rules_section, tech, position=None, sustainability=None):
-    """按 reporter 契约组装单只标的的 result dict。"""
+def _result(
+    code,
+    name,
+    values,
+    rules_section,
+    tech,
+    position=None,
+    sustainability=None,
+    volatility=None,
+    turnover_wan=None,
+):
+    """按 reporter 契约组装单只标的的 result dict。
+
+    总分经分红可持续性红标扣分（rules.yaml 的 stocks.sustainability 可配）。
+    """
     score = scorer.score_instrument(values, rules_section)
+    total, _penalty = scorer.apply_sustainability_penalty(
+        score["total"], sustainability, rules_section.get("sustainability")
+    )
     return {
         "code": code,
         "name": name,
-        "total": score["total"],
+        "total": total,
         "values": values,
         "scores": score["scores"],
         "missing": score["missing"],
         "tech": tech,
         "position": position,
         "sustainability": sustainability,
+        "volatility": volatility,
+        "turnover_wan": turnover_wan,
     }
 
 
@@ -116,6 +134,7 @@ def _stock_result(
     values = {
         "dividend_yield": dividend_yield,
         "dividend_years": _num(indicators.calc_dividend_years(dividends, as_of)),
+        "dividend_trend": _num(indicators.calc_dividend_trend(dividends, as_of)),
         "payout_ratio": _num(indicators.calc_payout_ratio(dividend_yield, pe)),
         "pe_vs_industry": _num(indicators.calc_pe_vs_industry(pe, industry_pe)),
         "pb_vs_industry": _num(indicators.calc_pb_vs_industry(pb, industry_pb)),
@@ -136,6 +155,8 @@ def _stock_result(
         sustainability=_sustainability(
             stock.code, dividends, as_of, cache_dir, financial_cache_days
         ),
+        volatility=_num(indicators.calc_volatility(kline)),
+        turnover_wan=_num(indicators.calc_turnover_amount(kline)),
     )
 
 
@@ -348,6 +369,7 @@ def run(
         cfg.output,
         time.monotonic() - started,
         market=market,
+        risk_hints=cfg.rules["stocks"].get("risk_hints"),
     )
 
 

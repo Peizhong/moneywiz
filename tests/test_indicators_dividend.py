@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from src.indicators import (
+    calc_dividend_trend,
     calc_dividend_years,
     calc_dividend_yield,
     calc_payout_ratio,
@@ -141,3 +142,40 @@ def test_ttm_dividend_per_share_edge_cases():
     assert calc_ttm_dividend_per_share(
         _dividend_frame([("2024-05-01", 0.9)]), AS_OF
     ) == pytest.approx(0.0)
+
+
+def test_dividend_trend_compares_recent_three_years():
+    # 近 3 年（2024-2026）合计 2.1；前 3 年（2021-2023）合计 3.0 → -30%
+    frame = _dividend_frame(
+        [
+            ("2021-06-10", 1.0),
+            ("2022-06-10", 1.0),
+            ("2023-06-10", 1.0),
+            ("2024-06-10", 0.7),
+            ("2025-06-10", 0.7),
+            ("2026-06-10", 0.7),
+        ]
+    )
+    assert calc_dividend_trend(frame, AS_OF) == pytest.approx(-30.0)
+
+
+def test_dividend_trend_rising_and_edges():
+    rising = _dividend_frame(
+        [
+            ("2021-06-10", 0.5),
+            ("2022-06-10", 0.5),
+            ("2023-06-10", 0.5),
+            ("2024-06-10", 1.0),
+            ("2025-06-10", 1.0),
+            ("2026-06-10", 1.0),
+        ]
+    )
+    assert calc_dividend_trend(rising, AS_OF) == pytest.approx(100.0)
+
+    # 前 3 年为零（新分红公司）且近 3 年有分红 → 视为增长
+    new_payer = _dividend_frame([("2024-06-10", 0.5), ("2025-06-10", 0.5)])
+    assert calc_dividend_trend(new_payer, AS_OF) == pytest.approx(100.0)
+
+    # 完全无分红或获取失败 → 不可评分
+    assert calc_dividend_trend(_dividend_frame([]), AS_OF) is None
+    assert calc_dividend_trend(None, AS_OF) is None

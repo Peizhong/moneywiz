@@ -333,6 +333,78 @@ def test_run_omits_marker_for_old_constituents(monkeypatch, config_dir, tmp_path
     assert "(新增)" not in report
 
 
+def test_run_applies_sustainability_penalty_to_total(monkeypatch, config_dir, tmp_path):
+    def health(code, cache_dir, cache_days=30):
+        return {"eps_growth": -12.6, "op_cash_per_share": 0.5, "payout_stmt": None}
+
+    _patch_data(monkeypatch, **_happy_overrides(get_financial_health=health))
+
+    report = main.run(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
+
+    # 平安银行：盈利下滑(-10%) + 分红超现金流(TTM 1.0/0.5=200% → -10%) = 扣 20% → 92.5→74.0
+    assert "74.0" in _row_for(report, "平安银行")
+    # 招商银行：TTM 分红较低，仅盈利下滑一项（-10%）→ 25.0→22.5
+    assert "22.5" in _row_for(report, "招商银行")
+
+
+def test_run_scores_dividend_trend(monkeypatch, tmp_path):
+    rules = {
+        "stocks": {
+            "indicators": {
+                "dividend_trend": {"weight": 100, "thresholds": {"high": 0, "mid": -30}}
+            }
+        },
+        "funds": {
+            "indicators": {
+                "discount_rate": {
+                    "weight": 100,
+                    "thresholds": {"discount": -1, "premium": 1},
+                }
+            }
+        },
+        "data": {"kline_days": 120, "pe_cache_days": 7},
+    }
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    for filename, payload in (
+        ("stocks.yaml", STOCKS_CONFIG),
+        ("funds.yaml", FUNDS_CONFIG),
+        ("rules.yaml", rules),
+        ("dividend_index.yaml", CONSTITUENTS_CONFIG),
+    ):
+        (config_dir / filename).write_text(
+            yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8"
+        )
+    _patch_data(monkeypatch, **_happy_overrides())
+
+    report = main.run(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
+
+    # DIVIDENDS_A：近 3 年 3.0 vs 前 3 年 2.0 → +50%（tier 1.0，满分档并入亮点）
+    row = _row_for(report, "平安银行")
+    assert "分红趋势 +50%" in row
+    assert "100.0" in row
+
+
+def test_run_reports_volatility_and_liquidity_hints(monkeypatch, config_dir, tmp_path):
+    def kline_for(code, days=120, as_of=None):
+        if code != STOCK_A:
+            return KLINE_A
+        closes = [10.0]
+        for index in range(69):
+            closes.append(closes[-1] * (1.05 if index % 2 == 0 else 0.95))  # 高波动
+        frame = _kline(closes)
+        frame["volume"] = [50.0] * len(closes)  # 日均成交额约 5 万元（手×100×价）
+        return frame
+
+    _patch_data(monkeypatch, **_happy_overrides(get_kline=kline_for))
+
+    report = main.run(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
+
+    row = _row_for(report, "平安银行")
+    assert "波动率" in row  # ±5% 交替 → 年化 ~78%，超过默认 35%
+    assert "日均成交" in row  # 远低于默认 5000 万
+
+
 def test_run_surfaces_sustainability_warnings(monkeypatch, config_dir, tmp_path):
     def health(code, cache_dir, cache_days=30):
         return {"eps_growth": -12.6, "op_cash_per_share": 0.5, "payout_stmt": 118.0}
