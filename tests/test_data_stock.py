@@ -84,7 +84,7 @@ def _dividend_frame():
 def test_spot_normalizes_columns_and_missing_values(monkeypatch):
     monkeypatch.setattr(ak, "stock_zh_a_spot_em", lambda: _spot_frame())
 
-    out = get_stock_spot()
+    out = get_stock_spot(["600036", "000001"])
 
     assert list(out.columns) == ["code", "name", "price", "pe", "pb"]
     assert out.loc[0, "code"] == "600036"
@@ -100,7 +100,7 @@ def test_spot_normalizes_columns_and_missing_values(monkeypatch):
 def test_spot_empty_source_returns_empty_frame_with_columns(monkeypatch):
     monkeypatch.setattr(ak, "stock_zh_a_spot_em", lambda: pd.DataFrame())
 
-    out = get_stock_spot()
+    out = get_stock_spot(["600036"])
 
     assert out is not None and out.empty
     assert list(out.columns) == ["code", "name", "price", "pe", "pb"]
@@ -226,7 +226,7 @@ def test_call_retries_once_then_succeeds(monkeypatch):
 
     monkeypatch.setattr(ak, "stock_zh_a_spot_em", stock_zh_a_spot_em)
 
-    out = get_stock_spot()
+    out = get_stock_spot(["600036"])
 
     assert len(attempts) == 2  # 失败后恰好重试 1 次
     assert out.loc[0, "code"] == "600036"
@@ -235,7 +235,7 @@ def test_call_retries_once_then_succeeds(monkeypatch):
 @pytest.mark.parametrize(
     ("ak_name", "fetch"),
     [
-        ("stock_zh_a_spot_em", lambda: get_stock_spot()),
+        ("stock_zh_a_spot_em", lambda: get_stock_spot(["600036"])),
         ("stock_zh_a_hist", lambda: get_kline("600036", as_of=AS_OF)),
         ("stock_history_dividend_detail", lambda: get_dividend_history("600036")),
     ],
@@ -251,6 +251,7 @@ def test_failure_returns_none_after_retry_and_logs_akshare_name(
 
     fake.__name__ = ak_name  # 仿冒真名，断言 warning 里出现的是 akshare 函数名
     monkeypatch.setattr(ak, ak_name, fake)
+    monkeypatch.setattr("src.data.requests.get", _raise_connection_error)  # 腾讯回退同样不可用
 
     with caplog.at_level(logging.WARNING):
         out = fetch()
@@ -258,3 +259,137 @@ def test_failure_returns_none_after_retry_and_logs_akshare_name(
     assert out is None
     assert len(attempts) == 2  # 重试 1 次
     assert ak_name in caplog.text  # warning 含 akshare 函数名
+
+
+# ---------------------------------------------------------------------------
+# 腾讯行情回退（东财 push2 对海外 IP 拒绝服务时的备用源）
+# ---------------------------------------------------------------------------
+
+# 2026-09-30 真实抓取的腾讯报文（GBK 编码）：沪 / 深 / 北交所各一条
+QUOTES_TEXT = 'v_sh600036="1~招商银行~600036~41.26~40.51~40.59~699871~408796~291075~41.25~212~41.24~51~41.23~211~41.22~239~41.21~273~41.26~908~41.27~180~41.28~645~41.29~121~41.30~924~~20260930161447~0.75~1.85~41.38~40.52~41.26/699871/2878465122~699871~287847~0.34~6.86~~41.38~40.52~2.12~8511.50~10405.71~0.91~44.56~36.46~1.49~-1792~41.13~6.81~6.93~~~0.00~287846.5122~87.8838~213~   A~GP-A~2.93~1.08~4.89~11.28~1.11~41.83~34.28~0.39~0.98~12.90~20628944429~25219845601~-47.61~2.30~20628944429~~~7.46~-0.17~~CNY~0~___D__F__N~41.35~-3413~";\nv_sz000001="51~平安银行~000001~11.57~11.35~11.36~1045357~673452~371906~11.57~9160~11.56~1219~11.55~853~11.54~1249~11.53~782~11.58~1617~11.59~523~11.60~7361~11.61~4272~11.62~2196~~20260930161500~0.22~1.94~11.65~11.33~11.57/1045357/1205814858~1045357~120581~0.54~5.17~~11.65~11.33~2.82~2245.24~2245.26~0.48~12.49~10.22~1.27~-2706~11.53~4.37~5.27~~~0.18~120581.4858~102.6259~887~   A~GP-A~7.12~0.95~5.26~7.93~0.72~11.83~9.74~-0.01~-0.87~13.20~19405684991~19405918198~-9.26~6.23~19405684991~~~10.24~-0.17~~CNY~0~~11.65~-13858~";\nv_bj920002="62~万达轴承~920002~51.94~52.32~51.56~19680~9209~10472~51.81~1~51.50~11~51.25~10~51.10~2~51.06~2~51.94~13~51.95~5~51.96~15~52.00~48~52.02~9~~20260930153430~-0.38~-0.73~55.90~50.33~51.94/19680/103030092~19680~10303.01~4.41~51.55~~55.90~50.33~10.65~23.16~33.09~4.35~68.01~36.63~1.32~-64~52.35~46.70~52.79~~~~10303.0092~0.0000~0~ ~GP~-33.71~4.03~0.00~8.45~7.69~88.34~46.93~7.11~-1.80~-17.80~44597153~63704155~-55.17~-33.47~44597153~~~-30.88~-0.50~~CNY~1~NBFND~0.00~0";'
+
+# 同日真实抓取的腾讯前复权日线（qfqday 行序：日期, 开, 收, 高, 低, 量）
+KLINE_JSON = '{"code":0,"msg":"","data":{"sh600036":{"qfqday":[["2026-09-28","40.670","40.640","41.080","40.380","543918.000"],["2026-09-29","40.490","40.510","40.780","40.220","449346.000"],["2026-09-30","40.590","41.260","41.380","40.520","699871.000"]],"prec":"40.690","version":"18"}}}'
+
+
+class _FakeResponse:
+    def __init__(self, content: bytes, status: int = 200):
+        self.content = content
+        self.status_code = status
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+
+def _raise_connection_error(*args, **kwargs):
+    raise ConnectionError("模拟网络不可用")
+
+
+def _patch_http(monkeypatch, routes):
+    """替换 requests.get：按 URL 关键字返回报文，并记录全部调用。"""
+    calls = []
+
+    def fake_get(url, params=None, timeout=None):
+        calls.append({"url": url, "params": params})
+        for key, payload in routes.items():
+            if key in url:
+                return _FakeResponse(payload)
+        raise AssertionError(f"未预期的请求：{url}")
+
+    monkeypatch.setattr("src.data.requests.get", fake_get)
+    return calls
+
+
+def test_spot_falls_back_to_tencent_when_eastmoney_fails(monkeypatch, caplog):
+    monkeypatch.setattr(ak, "stock_zh_a_spot_em", _raise_connection_error)
+    calls = _patch_http(monkeypatch, {"qt.gtimg.cn": QUOTES_TEXT.encode("gbk")})
+
+    with caplog.at_level(logging.WARNING):
+        out = get_stock_spot(["600036", "000001", "920002"])
+
+    assert list(out.columns) == ["code", "name", "price", "pe", "pb"]
+    by_code = out.set_index("code")
+    assert by_code.loc["600036", "name"] == "招商银行"
+    assert by_code.loc["600036", "price"] == pytest.approx(41.26)
+    assert by_code.loc["600036", "pe"] == pytest.approx(6.86)
+    assert by_code.loc["600036", "pb"] == pytest.approx(0.91)
+    assert by_code.loc["000001", "pe"] == pytest.approx(5.17)  # 深市字段位置一致
+    assert by_code.loc["000001", "pb"] == pytest.approx(0.48)
+    assert by_code.loc["920002", "name"] == "万达轴承"  # 北交所（bj 前缀）
+    assert len(calls) == 1  # 一次批量请求
+    assert "sh600036" in calls[0]["url"] and "sz000001" in calls[0]["url"]
+    assert "回退腾讯" in caplog.text
+
+
+def test_spot_primary_success_does_not_touch_tencent(monkeypatch):
+    monkeypatch.setattr(ak, "stock_zh_a_spot_em", lambda: _spot_frame())
+    calls = []
+    monkeypatch.setattr("src.data.requests.get", lambda *a, **k: calls.append(1))
+
+    out = get_stock_spot(["600036"])
+
+    assert list(out["code"]) == ["600036"]
+    assert calls == []
+
+
+def test_spot_skips_codes_with_unknown_prefix(monkeypatch):
+    monkeypatch.setattr(ak, "stock_zh_a_spot_em", _raise_connection_error)
+    calls = _patch_http(monkeypatch, {"qt.gtimg.cn": QUOTES_TEXT.encode("gbk")})
+
+    out = get_stock_spot(["12345", "600036"])  # 前缀无法识别 → 不请求也不出现
+
+    assert list(out["code"]) == ["600036"]
+    assert "12345" not in calls[0]["url"]
+
+
+def test_spot_all_codes_unknown_returns_empty_frame_without_request(monkeypatch):
+    monkeypatch.setattr(ak, "stock_zh_a_spot_em", _raise_connection_error)
+    calls = []
+    monkeypatch.setattr("src.data.requests.get", lambda *a, **k: calls.append(1))
+
+    out = get_stock_spot(["12345"])
+
+    assert out is not None and out.empty
+    assert list(out.columns) == ["code", "name", "price", "pe", "pb"]
+    assert calls == []
+
+
+def test_spot_both_sources_fail_returns_none(monkeypatch):
+    monkeypatch.setattr(ak, "stock_zh_a_spot_em", _raise_connection_error)
+    monkeypatch.setattr("src.data.requests.get", _raise_connection_error)
+
+    assert get_stock_spot(["600036"]) is None
+
+
+def test_kline_falls_back_to_tencent_qfq(monkeypatch, caplog):
+    monkeypatch.setattr(ak, "stock_zh_a_hist", _raise_connection_error)
+    calls = _patch_http(monkeypatch, {"fqkline": KLINE_JSON.encode("utf-8")})
+
+    with caplog.at_level(logging.WARNING):
+        out = get_kline("600036", days=120, as_of=AS_OF)
+
+    assert list(out.columns) == ["date", "close"]
+    assert out["close"].tolist() == pytest.approx([40.64, 40.51, 41.26])
+    assert out["date"].is_monotonic_increasing
+    assert calls[0]["params"]["param"] == "sh600036,day,,,120,qfq"
+    assert "回退腾讯" in caplog.text
+
+
+def test_kline_primary_success_does_not_touch_tencent(monkeypatch):
+    raw = _kline_frame([("2026-09-30", 40.0)])
+    monkeypatch.setattr(ak, "stock_zh_a_hist", lambda **kwargs: raw)
+    calls = []
+    monkeypatch.setattr("src.data.requests.get", lambda *a, **k: calls.append(1))
+
+    out = get_kline("600036", as_of=AS_OF)
+
+    assert not out.empty
+    assert calls == []
+
+
+def test_kline_both_sources_fail_returns_none(monkeypatch):
+    monkeypatch.setattr(ak, "stock_zh_a_hist", _raise_connection_error)
+    monkeypatch.setattr("src.data.requests.get", _raise_connection_error)
+
+    assert get_kline("600036", as_of=AS_OF) is None

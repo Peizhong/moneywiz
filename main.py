@@ -203,7 +203,10 @@ def run(
     kline_days = cfg.rules["data"]["kline_days"]
     pe_cache_days = cfg.rules["data"]["pe_cache_days"]
 
-    spot = _fetch(lambda: data.get_stock_spot(), "get_stock_spot")
+    spot = _fetch(
+        lambda: data.get_stock_spot([stock.code for stock in cfg.stocks]),
+        "get_stock_spot",
+    )
     fund_quotes = _fetch_fund_quotes(cfg.funds)
 
     stock_results = [

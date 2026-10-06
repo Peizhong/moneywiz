@@ -172,7 +172,7 @@ def _patch_data(monkeypatch, **overrides):
 def _happy_overrides(**extra):
     """正常路径的数据替身；extra 可覆盖单个接口。"""
     return {
-        "get_stock_spot": lambda: SPOT,
+        "get_stock_spot": lambda codes: SPOT,
         "get_kline": lambda code, days=120, as_of=None: {
             STOCK_A: KLINE_A,
             STOCK_B: KLINE_B,
@@ -239,7 +239,7 @@ def test_run_stock_missing_from_spot_table_still_scored(
     monkeypatch, config_dir, tmp_path, caplog
 ):
     spot = SPOT[SPOT["code"] != STOCK_A].reset_index(drop=True)
-    _patch_data(monkeypatch, **_happy_overrides(get_stock_spot=lambda: spot))
+    _patch_data(monkeypatch, **_happy_overrides(get_stock_spot=lambda codes: spot))
 
     with caplog.at_level(logging.WARNING):
         report = main.run(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)

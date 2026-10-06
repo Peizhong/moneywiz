@@ -522,9 +522,41 @@ def test_failure_returns_none_after_retry_and_logs_akshare_name(
     fake.__name__ = ak_name  # 仿冒真名，断言 warning 里出现的是 akshare 函数名
     monkeypatch.setattr(ak, ak_name, fake)
 
+    def open_fund_fallback(*args, **kwargs):
+        raise ConnectionError("网络超时")
+
+    open_fund_fallback.__name__ = "fund_open_fund_info_em"
+    if ak_name != "fund_open_fund_info_em":
+        # 基金历史回退会走单位净值走势，同样置为不可用（并避免真实联网）
+        monkeypatch.setattr(ak, "fund_open_fund_info_em", open_fund_fallback)
+
     with caplog.at_level(logging.WARNING):
         out = fetch()
 
     assert out is None
     assert len(attempts) == 2  # 重试 1 次
     assert ak_name in caplog.text  # warning 含 akshare 函数名
+
+
+def test_etf_history_falls_back_to_nav_series(monkeypatch, caplog):
+    """东财 ETF 历史不可用时回退到单位净值走势（海外网络下的常见路径）。"""
+    calls = []
+
+    def failing(**kwargs):
+        raise ConnectionError("模拟东财历史行情不可用")
+
+    def open_fund_info(symbol, indicator):
+        calls.append({"symbol": symbol, "indicator": indicator})
+        return _open_fund_nav_frame()
+
+    monkeypatch.setattr(ak, "fund_etf_hist_em", failing)
+    monkeypatch.setattr(ak, "fund_open_fund_info_em", open_fund_info)
+
+    with caplog.at_level(logging.WARNING):
+        out = get_fund_nav_history(ETF_CODE, "etf")
+
+    assert list(out.columns) == ["date", "close"]
+    # 原始帧含一条 NaN 净值被剔除，其余按日期升序
+    assert out["close"].tolist() == pytest.approx([1.100, 1.120, 1.130, 1.250])
+    assert calls == [{"symbol": ETF_CODE, "indicator": "单位净值走势"}]
+    assert "回退" in caplog.text

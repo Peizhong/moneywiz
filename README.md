@@ -101,14 +101,19 @@ funds:
 
 ## 已知限制
 
+- **数据源回退（东财 → 腾讯）**：`push2*.eastmoney.com` 会按出口 IP 拒绝海外请求
+  （实测海外直连时 TLS 握手成功即被断开），个股行情与 K 线在东财失败时自动回退腾讯
+  （`qt.gtimg.cn` 批量行情、`web.ifzq.gtimg.cn` 前复权日线），基金历史回退到
+  `fund_open_fund_info_em` 的单位净值走势。回退会记录「回退…」warning；基金净值趋势
+  回退后基于净值而非市价（语义不变）。东财独有、无等价公开源的两项在海外网络下仍为
+  「数据不足」：行业 PE/PB 对比、ETF IOPV 折溢价。
+- **东财行情路径未在本环境真实联调**：本开发环境出口 IP 被 `push2*.eastmoney.com`
+  拒绝，`stock_zh_a_spot_em`、`stock_zh_a_hist`、`fund_etf_spot_em`/`fund_lof_spot_em`、
+  行业板块接口的字段映射依据 akshare 1.19.1 源码核对；腾讯回退路径已实测可用。
+  `stock_history_dividend_detail`、`fund_open_fund_info_em`、`fund_overview_em`、
+  `stock_index_pe_lg` 已验证可用。
 - **akshare 上游接口变更**：接口不可用或字段改名时会记录 warning，日志与错误信息
   指向具体的 akshare 函数名（如 `stock_zh_a_spot_em`），便于定位是哪个上游接口失效；
-  该数据源对应的指标降级为「数据不足」，不会中断整体运行。
-- **沙箱网络限制**：本项目的开发沙箱无法访问 `push2.eastmoney.com` /
-  `push2delay.eastmoney.com`，因此依赖这些域名的行情类接口（`stock_zh_a_spot_em`、
-  `stock_zh_a_hist`、`fund_etf_spot_em`/`fund_lof_spot_em`、行业板块接口）未能真实联调，
-  需在放行上述域名的网络环境下验证；`stock_history_dividend_detail`、
-  `fund_open_fund_info_em`、`fund_overview_em`、`stock_index_pe_lg` 已验证可用。
-  测试全部使用 mock，不受网络影响。
+  该数据源对应的指标降级为「数据不足」，不会中断整体运行。测试全部使用 mock，不联网。
 - **数据时效**：行情/净值来自公开接口，可能有延迟；行业 PE/PB 最多缓存
   `pe_cache_days` 天，指数 PE 分位取历史区间近似分位，均非投资建议。

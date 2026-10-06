@@ -38,6 +38,7 @@ from pathlib import Path
 
 import akshare as ak
 import pandas as pd
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,10 @@ FUND_QUOTE_COLUMNS = ("code", "name", "price", "iopv")
 FUND_NAV_COLUMNS = ("date", "close")
 FUND_DIVIDEND_COLUMNS = ("date",)
 INDEX_PE_COLUMNS = ("date", "pe")
+
+# 腾讯回退源（东财 push2 行情对海外 IP 拒绝服务时的备用行情/K线）
+TENCENT_QUOTE_URL = "https://qt.gtimg.cn/q="
+TENCENT_KLINE_URL = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
 
 # stock_index_pe_lg 接受的指数名（"中证红利" 等不在其列，见 resolve_index_symbol）
 SUPPORTED_INDEX_PE = {
@@ -68,15 +73,18 @@ SUPPORTED_INDEX_PE = {
 }
 
 
-def _call(ak_fn, *args, **kwargs):
-    """调用 akshare 函数：异常 → warning（含函数名）+ 重试 1 次；仍失败返回 None。"""
-    name = getattr(ak_fn, "__name__", repr(ak_fn))
+def _call(fn, *args, label=None, **kwargs):
+    """调用数据源函数：异常 → warning（含函数名）+ 重试 1 次；仍失败返回 None。
+
+    ``label`` 可覆盖日志里的数据源名称（默认 ``akshare <函数名>``）。
+    """
+    name = label or f"akshare {getattr(fn, '__name__', repr(fn))}"
     for attempt in (1, 2):
         try:
-            return ak_fn(*args, **kwargs)
+            return fn(*args, **kwargs)
         except Exception as exc:  # 网络/解析等上游异常一律降级为 None
             logger.warning(
-                "akshare %s 获取失败（第 %d 次尝试）：%s: %s",
+                "%s 获取失败（第 %d 次尝试）：%s: %s",
                 name,
                 attempt,
                 type(exc).__name__,
@@ -85,23 +93,91 @@ def _call(ak_fn, *args, **kwargs):
     return None
 
 
-def get_stock_spot() -> pd.DataFrame | None:
-    """全市场 A 股实时行情，归一为 ``code, name, price, pe, pb``；失败 → None。"""
+def _tencent_symbol(code: str) -> str | None:
+    """A 股代码 → 腾讯行情符号；6→sh、0/3→sz、4/8/9→bj，无法识别 → None。"""
+    if code.startswith("6"):
+        return f"sh{code}"
+    if code.startswith(("0", "3")):
+        return f"sz{code}"
+    if code.startswith(("4", "8", "9")):
+        return f"bj{code}"
+    return None
+
+
+def _http_text(url: str, params: dict | None = None, encoding: str = "gbk") -> str:
+    """GET 并解码（腾讯行情为 GBK，K 线 JSON 为 UTF-8）；异常交给 _call 降级。"""
+    response = requests.get(url, params=params, timeout=15)
+    response.raise_for_status()
+    return response.content.decode(encoding, errors="replace")
+
+
+def _num_or_none(value) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def get_stock_spot(codes) -> pd.DataFrame | None:
+    """自选 A 股实时行情，归一为 ``code, name, price, pe, pb`` 并只保留 codes。
+
+    主源东财 ``stock_zh_a_spot_em`` 全市场表（push2 对海外 IP 拒绝服务）；
+    失败时回退腾讯 ``qt.gtimg.cn`` 批量行情（一次请求，覆盖沪/深/北交所）。
+    两个源都失败 → None；代码前缀无法识别时该代码不出现（也不会被请求）。
+    """
+    codes = list(codes)
     raw = _call(ak.stock_zh_a_spot_em)
     if raw is None:
-        return None
-    if raw.empty:
-        return pd.DataFrame(columns=list(SPOT_COLUMNS))
+        logger.warning("get_stock_spot 东财行情不可用，回退腾讯行情")
+        frame = _tencent_spot(codes)
+        if frame is None:
+            return None
+    else:
+        if raw.empty:
+            return pd.DataFrame(columns=list(SPOT_COLUMNS))
+        frame = pd.DataFrame(
+            {
+                "code": raw["代码"].astype(str),
+                "name": raw["名称"].astype(str),
+                "price": pd.to_numeric(raw["最新价"], errors="coerce"),
+                "pe": pd.to_numeric(raw["市盈率-动态"], errors="coerce"),
+                "pb": pd.to_numeric(raw["市净率"], errors="coerce"),
+            }
+        )
+    return frame[frame["code"].isin(codes)].reset_index(drop=True)
 
-    return pd.DataFrame(
-        {
-            "code": raw["代码"].astype(str),
-            "name": raw["名称"].astype(str),
-            "price": pd.to_numeric(raw["最新价"], errors="coerce"),
-            "pe": pd.to_numeric(raw["市盈率-动态"], errors="coerce"),
-            "pb": pd.to_numeric(raw["市净率"], errors="coerce"),
-        }
-    ).reset_index(drop=True)
+
+def _tencent_spot(codes: list[str]) -> pd.DataFrame | None:
+    """腾讯批量行情 → canonical 行情帧；全部代码前缀无法识别 → 空帧（不请求）。"""
+    symbols = [symbol for c in codes if (symbol := _tencent_symbol(c)) is not None]
+    if not symbols:
+        return pd.DataFrame(columns=list(SPOT_COLUMNS))
+    text = _call(
+        _http_text,
+        TENCENT_QUOTE_URL + ",".join(symbols),
+        label="tencent qt.gtimg.cn",
+    )
+    if text is None:
+        return None
+    rows = []
+    for line in text.strip().split(";"):
+        if '="' not in line:
+            continue
+        parts = line.split('="', 1)[1].rstrip('"').split("~")
+        if len(parts) < 47 or not parts[2]:
+            continue
+        rows.append(
+            {
+                "code": parts[2],
+                "name": parts[1],
+                "price": _num_or_none(parts[3]),
+                "pe": _num_or_none(parts[39]),
+                "pb": _num_or_none(parts[46]),
+            }
+        )
+    if not rows:
+        return pd.DataFrame(columns=list(SPOT_COLUMNS))
+    return pd.DataFrame(rows, columns=list(SPOT_COLUMNS))
 
 
 def get_kline(
@@ -122,7 +198,8 @@ def get_kline(
         adjust="qfq",
     )
     if raw is None:
-        return None
+        logger.warning("get_kline(%s) 东财行情不可用，回退腾讯行情", code)
+        return _tencent_kline(code, days)
     if raw.empty:
         return pd.DataFrame(columns=list(KLINE_COLUMNS))
 
@@ -132,6 +209,43 @@ def get_kline(
             "close": pd.to_numeric(raw["收盘"], errors="coerce"),
         }
     )
+    return (
+        frame.sort_values("date")
+        .tail(days)
+        .dropna(subset=["close"])  # indicators 不允许看到 NaN 收盘价
+        .reset_index(drop=True)
+    )
+
+
+def _tencent_kline(code: str, days: int) -> pd.DataFrame | None:
+    """腾讯前复权日线 → canonical K 线帧；取末尾 days 根。
+
+    腾讯接口按条数取数（不接日期区间），故回退路径忽略 ``as_of``。
+    """
+    symbol = _tencent_symbol(code)
+    if symbol is None:
+        return None
+    text = _call(
+        _http_text,
+        TENCENT_KLINE_URL,
+        params={"param": f"{symbol},day,,,{days},qfq"},
+        encoding="utf-8",
+        label="tencent fqkline",
+    )
+    if text is None:
+        return None
+    try:
+        payload = json.loads(text)
+        rows = payload["data"][symbol].get("qfqday") or []
+    except (ValueError, KeyError, TypeError):
+        logger.warning("腾讯 K 线解析失败：%s", code)
+        return None
+    rows = [row for row in rows if len(row) >= 3]
+    if not rows:
+        return pd.DataFrame(columns=list(KLINE_COLUMNS))
+    frame = pd.DataFrame({"date": [r[0] for r in rows], "close": [r[2] for r in rows]})
+    frame["date"] = pd.to_datetime(frame["date"])
+    frame["close"] = pd.to_numeric(frame["close"], errors="coerce")
     return (
         frame.sort_values("date")
         .tail(days)
@@ -362,6 +476,17 @@ def get_fund_nav_history(
             adjust="",
         )
         date_column, close_column = "日期", "收盘"
+        if raw is None:
+            # 东财历史行情不可用（海外常见）→ 回退单位净值走势（fund.eastmoney.com 可达）
+            logger.warning(
+                "get_fund_nav_history(%s, %s) 东财行情不可用，回退单位净值走势",
+                code,
+                fund_type,
+            )
+            raw = _call(
+                ak.fund_open_fund_info_em, symbol=code, indicator="单位净值走势"
+            )
+            date_column, close_column = "净值日期", "单位净值"
     if raw is None:
         return None
     if raw.empty:
