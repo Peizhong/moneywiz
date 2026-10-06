@@ -78,7 +78,8 @@ def _stock_result(
 ):
     """组装一只股票：每个数据源独立降级，任一失败只影响对应指标。"""
     row = _spot_row(spot, stock.code)
-    if row is None:
+    if row is None and spot is not None and not spot.empty:
+        # 只有行情表可用却缺该股时才逐股告警；整表不可用已有表级告警，避免误导性刷屏
         logger.warning("股票 %s 不在行情表中，价格/PE/PB 按缺失处理", stock.code)
     price = _num(row["price"]) if row is not None else None
     pe = _num(row["pe"]) if row is not None else None

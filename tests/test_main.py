@@ -6,6 +6,7 @@
 """
 
 from datetime import date
+import logging
 
 import pandas as pd
 import pytest
@@ -235,12 +236,16 @@ def test_run_happy_path_reports_all_instruments_sorted_by_total(
 
 
 def test_run_stock_missing_from_spot_table_still_scored(
-    monkeypatch, config_dir, tmp_path
+    monkeypatch, config_dir, tmp_path, caplog
 ):
     spot = SPOT[SPOT["code"] != STOCK_A].reset_index(drop=True)
     _patch_data(monkeypatch, **_happy_overrides(get_stock_spot=lambda: spot))
 
-    report = main.run(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
+    with caplog.at_level(logging.WARNING):
+        report = main.run(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
+
+    # 行情表可用但缺该股 → 仍然逐股告警，便于定位停牌/退市
+    assert f"股票 {STOCK_A} 不在行情表中" in caplog.text
 
     row = _row_for(report, "平安银行")
     # 价格缺失 → 股息率/派息率/PE/PB/均线位置不可评分；分红年数(1.0)与 5 日动量(0.5) 仍打分：
@@ -281,6 +286,19 @@ def test_run_all_sources_failing_reports_insufficient_data(
         row = _row_for(report, name)
         assert "N/A" in row and "数据不足" in row
     assert "数据不足 3" in report
+
+
+def test_run_spot_table_failure_warns_once_not_per_stock(
+    monkeypatch, config_dir, tmp_path, caplog
+):
+    """整张行情表不可用时只保留表级告警，不再逐股重复误导性提示。"""
+    _patch_data(monkeypatch)  # 所有数据源返回 None，含行情表
+
+    with caplog.at_level(logging.WARNING):
+        main.run(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
+
+    assert "get_stock_spot 获取失败" in caplog.text  # 表级失败仍有告警
+    assert "不在行情表中" not in caplog.text  # 不逐股重复
 
 
 def test_run_passes_data_rules_and_as_of_through(monkeypatch, config_dir, tmp_path):
