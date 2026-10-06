@@ -275,3 +275,60 @@ def test_render_report_empty_lists_render_placeholders():
     assert "(无)" in report
     assert "扫描 0 只标的（股票 0 / 基金 0）" in report
     assert "数据不足 0" in report
+
+
+def _detailed_result(position):
+    result = _result(
+        "600036",
+        "招商银行",
+        80.0,
+        scores={"dividend_yield": 1.0, "payout_ratio": 1.0, "pe_vs_industry": 0.0},
+    )
+    result["values"] = {
+        "dividend_yield": 4.5,
+        "payout_ratio": 55.0,
+        "pe_vs_industry": 42.3,
+    }
+    result["position"] = position
+    return result
+
+
+def test_highlights_and_risks_include_values_and_low_position():
+    report = render_report([_detailed_result(23.4)], [], OUTPUT_CFG, 1.0)
+
+    row = _table_rows(report, STOCK_HEADER)[0]
+    assert "股息率 4.5%" in row  # 亮点带数值
+    assert "派息率 55%" in row
+    assert "PE估值 +42%" in row  # 风险带数值（偏离行业为正）
+    assert "120日低位 23%" in row  # 低位并入亮点文字
+
+
+def test_high_and_middle_position_phrases():
+    row = _table_rows(
+        render_report([_detailed_result(82.2)], [], OUTPUT_CFG, 1.0), STOCK_HEADER
+    )[0]
+    assert "120日高位 82%" in row  # 高位并入风险文字
+
+    row = _table_rows(
+        render_report([_detailed_result(55.0)], [], OUTPUT_CFG, 1.0), STOCK_HEADER
+    )[0]
+    assert "120日中位 55%" in row
+
+    row = _table_rows(
+        render_report([_detailed_result(None)], [], OUTPUT_CFG, 1.0), STOCK_HEADER
+    )[0]
+    assert "120日" not in row  # 无 K 线数据时不显示位置
+
+
+def test_detail_falls_back_to_label_without_value():
+    from src.reporter import _detail_text
+
+    # 数值缺失（旧契约）时仅显示指标名；数值存在时带格式化的值
+    assert _detail_text({"dividend_yield": 1.0}, {}, 1.0) == "股息率"
+    assert (
+        _detail_text({"dividend_yield": 1.0}, {"dividend_yield": 4.5}, 1.0)
+        == "股息率 4.5%"
+    )
+    # 未知指标名与非法数值都不抛异常
+    assert _detail_text({"custom_x": 1.0}, {"custom_x": 3}, 1.0) == "custom_x"
+    assert _detail_text({"fund_size": 1.0}, {"fund_size": "n/a"}, 1.0) == "基金规模"

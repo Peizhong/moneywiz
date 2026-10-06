@@ -12,6 +12,7 @@ from src.indicators import (
     calc_ma60_position,
     calc_macd,
     calc_momentum_5d,
+    calc_price_position,
     calc_rsi,
 )
 
@@ -129,3 +130,17 @@ def test_rsi_insufficient_rows_returns_none():
 
 def test_rsi_none_returns_none():
     assert calc_rsi(None) is None
+
+
+def test_price_position_is_percentile_of_last_close_in_window():
+    # 区间 [10, 20]，最新 15 → 50%
+    assert calc_price_position(_kline_frame([10.0, 20.0, 15.0])) == pytest.approx(50.0)
+    # 最新价即区间最低 / 最高
+    assert calc_price_position(_kline_frame([20.0, 10.0])) == pytest.approx(0.0)
+    assert calc_price_position(_kline_frame([10.0, 20.0])) == pytest.approx(100.0)
+
+
+def test_price_position_invalid_inputs_return_none():
+    assert calc_price_position(None) is None
+    assert calc_price_position(_kline_frame([10.0])) is None  # 不足 2 行
+    assert calc_price_position(_kline_frame([10.0, 10.0, 10.0])) is None  # 全平

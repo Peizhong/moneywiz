@@ -275,6 +275,20 @@ def test_run_kline_failure_keeps_other_indicators_scoring(
     assert "平安银行" in report and "红利ETF" in report  # 其余标的不受影响
 
 
+def test_run_includes_price_position_in_rows(monkeypatch, config_dir, tmp_path):
+    def kline_for(code, days=120, as_of=None):
+        if code == STOCK_B:
+            return _kline([20.0] * 60 + [10.0] * 10)  # 最新价处于窗口最低 → 低位
+        return KLINE_A  # [9]*60 + [10]*10 → 最新价处于窗口最高 → 高位
+
+    _patch_data(monkeypatch, **_happy_overrides(get_kline=kline_for))
+
+    report = main.run(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
+
+    assert "120日高位 100%" in _row_for(report, "平安银行")
+    assert "120日低位 0%" in _row_for(report, "招商银行")
+
+
 def test_run_all_sources_failing_reports_insufficient_data(
     monkeypatch, config_dir, tmp_path
 ):

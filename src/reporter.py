@@ -29,6 +29,26 @@ INDICATOR_LABELS: dict[str, str] = {
     "fund_size": "基金规模",
 }
 
+# 亮点/风险里的数值格式（指标单位各不相同；格式化失败时仅显示指标名）
+INDICATOR_VALUE_FORMATS: dict[str, str] = {
+    "dividend_yield": "{:.1f}%",
+    "dividend_years": "{:.0f}年",
+    "payout_ratio": "{:.0f}%",
+    "pe_vs_industry": "{:+.0f}%",
+    "pb_vs_industry": "{:+.0f}%",
+    "ma60_position": "{:+.1f}%",
+    "momentum_5d": "{:+.1f}%",
+    "discount_rate": "{:+.2f}%",
+    "nav_trend_20d": "{:+.1f}%",
+    "index_pe_vs_history": "{:.0f}%",
+    "dividend_frequency": "{:.0f}次",
+    "fund_size": "{:.0f}亿",
+}
+
+# 120 日区间分位（calc_price_position）并入亮点/风险的阈值
+POSITION_LOW = 30.0
+POSITION_HIGH = 70.0
+
 STOCK_HEADER = "【股票】"
 FUND_HEADER = "【基金】"
 EMPTY_SECTION = "(无)"
@@ -95,6 +115,7 @@ def _table(results: list[dict], output_cfg: dict) -> str:
         total = item["total"]
         has_score = total is not None
         scores = item.get("scores") or {}
+        low_phrase, high_phrase = _position_phrases(item.get("position"))
         rows.append(
             [
                 rank,
@@ -109,8 +130,8 @@ def _table(results: list[dict], output_cfg: dict) -> str:
                     output_cfg["avoid_bottom_n"],
                     has_score,
                 ),
-                _label_text(scores, 1.0),
-                _label_text(scores, 0.0),
+                _detail_text(scores, item.get("values") or {}, 1.0, low_phrase),
+                _detail_text(scores, item.get("values") or {}, 0.0, high_phrase),
                 _tech_text(item.get("tech")),
             ]
         )
@@ -139,6 +160,52 @@ def _label_text(scores: dict, tier: float) -> str:
         if value == tier
     ]
     return "、".join(labels[:2]) if labels else "-"
+
+
+def _detail_text(
+    scores: dict, values: dict, tier: float, extra: str | None = None
+) -> str:
+    """指定档位的「指标名 数值」明细（最多 2 项），可选追加一项（如位置短语）。
+
+    数值缺失或格式未知时仅显示指标名；无任何内容则为 ``-``。
+    """
+    items = [
+        _format_detail(name, values.get(name))
+        for name, value in scores.items()
+        if value == tier
+    ][:2]
+    if extra:
+        items.append(extra)
+    return "、".join(items) if items else "-"
+
+
+def _format_detail(name: str, value) -> str:
+    """``指标名 数值``；数值缺失或用例外的指标只显示名称。"""
+    label = INDICATOR_LABELS.get(name, name)
+    template = INDICATOR_VALUE_FORMATS.get(name)
+    if value is None or template is None:
+        return label
+    try:
+        return f"{label} {template.format(float(value))}"
+    except (TypeError, ValueError):
+        return label
+
+
+def _position_phrases(position) -> tuple[str | None, str | None]:
+    """把 120 日区间分位转成（亮点追加, 风险追加）。
+
+    ≤30 视为低位（亮点），≥70 视为高位（风险），中间档以中性文字并入亮点；
+    ``position`` 缺失/非法 → 都不追加（如无 K 线数据的标的）。
+    """
+    try:
+        value = float(position)
+    except (TypeError, ValueError):
+        return None, None
+    if value <= POSITION_LOW:
+        return f"120日低位 {value:.0f}%", None
+    if value >= POSITION_HIGH:
+        return None, f"120日高位 {value:.0f}%"
+    return f"120日中位 {value:.0f}%", None
 
 
 def _tech_text(tech: dict | None) -> str:

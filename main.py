@@ -43,7 +43,7 @@ def _num(value):
     return value
 
 
-def _result(code, name, values, rules_section, tech):
+def _result(code, name, values, rules_section, tech, position=None):
     """按 reporter 契约组装单只标的的 result dict。"""
     score = scorer.score_instrument(values, rules_section)
     return {
@@ -54,6 +54,7 @@ def _result(code, name, values, rules_section, tech):
         "scores": score["scores"],
         "missing": score["missing"],
         "tech": tech,
+        "position": position,
     }
 
 
@@ -117,7 +118,14 @@ def _stock_result(
         "macd": macd["signal"] if macd else None,
         "rsi": _num(indicators.calc_rsi(kline)),
     }
-    return _result(stock.code, stock.name, values, rules_section, tech)
+    return _result(
+        stock.code,
+        stock.name,
+        values,
+        rules_section,
+        tech,
+        position=_num(indicators.calc_price_position(kline)),
+    )
 
 
 def _fetch_fund_quotes(cfg_funds):
@@ -188,7 +196,14 @@ def _fund_result(fund, quotes, as_of, kline_days, rules_section):
         ),
         "fund_size": _num(indicators.calc_fund_size(scale)),
     }
-    return _result(fund.code, fund.name, values, rules_section, tech=None)
+    return _result(
+        fund.code,
+        fund.name,
+        values,
+        rules_section,
+        tech=None,
+        position=_num(indicators.calc_price_position(nav_history)),
+    )
 
 
 def run(

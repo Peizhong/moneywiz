@@ -170,6 +170,24 @@ def calc_rsi(kline: pd.DataFrame | None, period: int = 14) -> float | None:
     return float(100.0 - 100.0 / (1.0 + rs))
 
 
+def calc_price_position(kline: pd.DataFrame | None) -> float | None:
+    """最新收盘在窗口 [最低, 最高] 区间中的分位（0-100，越低越接近低位）。
+
+    使用 K 线帧全部行（本项目为近 kline_days 根，默认 120）；行数不足 2 或
+    区间为 0（全平）→ None。
+    """
+    if kline is None or len(kline) < 2:
+        return None
+    closes = pd.to_numeric(kline["close"], errors="coerce").dropna()
+    if len(closes) < 2:
+        return None
+    lowest, highest = float(closes.min()), float(closes.max())
+    if highest == lowest:
+        return None
+    position = (float(closes.iloc[-1]) - lowest) / (highest - lowest) * 100
+    return min(100.0, max(0.0, position))
+
+
 # ---------------------------------------------------------------------------
 # 基金指标（基金历史帧规范列：date（datetime64，升序）、close（float）；
 # 指数 PE 帧规范列：date、pe（float，升序）；基金分红帧仅需 date 列）
