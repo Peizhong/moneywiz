@@ -1,0 +1,278 @@
+"""main 编排入口（run / main）的集成测试。
+
+全部 ``src.data.*`` 均被 monkeypatch（规范形状 fixture），不联网；
+配置使用仓库内 ``config/``，以真实权重走通「配置 → 数据 → 指标 → 打分 → 报告」全链路。
+"""
+
+from datetime import date
+from pathlib import Path
+
+import pandas as pd
+
+import main
+from src import config, data
+
+CONFIG_DIR = Path(__file__).resolve().parents[1] / "config"
+AS_OF = date(2026, 10, 6)
+
+STOCK_A = "000001"  # 平安银行（分红强）
+STOCK_B = "600036"  # 招商银行（分红弱）
+FUND_CODE = "510880"  # 红利ETF
+
+# 全部数据接口的默认替身：返回 None（获取失败）
+DATA_FUNCTIONS = (
+    "get_stock_spot",
+    "get_kline",
+    "get_dividend_history",
+    "get_industry_pe_pb",
+    "get_fund_quotes",
+    "get_fund_nav_history",
+    "get_fund_latest_nav",
+    "get_fund_dividend_history",
+    "get_fund_overview",
+    "resolve_index_symbol",
+    "get_index_pe_history",
+)
+
+
+def _kline(closes):
+    return pd.DataFrame(
+        {
+            "date": pd.date_range(end="2026-10-06", periods=len(closes), freq="D"),
+            "close": [float(value) for value in closes],
+        }
+    )
+
+
+def _dividends(entries):
+    return pd.DataFrame(
+        {
+            "date": pd.to_datetime([day for day, _ in entries]),
+            "dividend_per_share": [float(amount) for _, amount in entries],
+        }
+    )
+
+
+SPOT = pd.DataFrame(
+    {
+        "code": [STOCK_A, STOCK_B],
+        "name": ["平安银行", "招商银行"],
+        "price": [10.0, 20.0],
+        "pe": [5.0, 8.0],
+        "pb": [0.5, 1.2],
+    }
+)
+KLINE_A = _kline([9.0] * 60 + [10.0] * 10)
+KLINE_B = _kline([20.0] * 70)
+DIVIDENDS_A = _dividends(
+    [
+        ("2022-06-10", 1.0),
+        ("2023-06-10", 1.0),
+        ("2024-06-10", 1.0),
+        ("2025-06-10", 1.0),
+        ("2026-06-10", 1.0),
+    ]
+)
+DIVIDENDS_B = _dividends([("2024-07-01", 0.2)])
+INDUSTRY = {
+    STOCK_A: {"industry": "银行", "pe": 10.0, "pb": 1.0},
+    STOCK_B: {"industry": "银行", "pe": 10.0, "pb": 1.0},
+}
+FUND_QUOTES = pd.DataFrame(
+    {"code": [FUND_CODE], "name": ["红利ETF"], "price": [3.00], "iopv": [3.05]}
+)
+FUND_NAV = pd.DataFrame(
+    {
+        "date": pd.date_range(end="2026-10-06", periods=25, freq="D"),
+        "close": [1.0] * 5 + [1.0 + 0.0015 * i for i in range(20)],
+    }
+)
+FUND_DIVIDENDS = pd.DataFrame(
+    {"date": pd.to_datetime(["2024-12-12", "2025-11-17", "2026-06-11"])}
+)
+INDEX_PE = pd.DataFrame(
+    {
+        "date": pd.date_range(end="2026-10-06", periods=11, freq="D"),
+        "pe": [10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 20.0, 19.0, 18.0, 17.0, 15.0],
+    }
+)
+
+
+def _patch_data(monkeypatch, **overrides):
+    """替换 src.data 的全部对外函数；未指定的返回 None（模拟获取失败）。"""
+    for name in DATA_FUNCTIONS:
+        monkeypatch.setattr(data, name, overrides.get(name, lambda *a, **k: None))
+
+
+def _happy_overrides(**extra):
+    """正常路径的数据替身；extra 可覆盖单个接口。"""
+    return {
+        "get_stock_spot": lambda: SPOT,
+        "get_kline": lambda code, days=120, as_of=None: {
+            STOCK_A: KLINE_A,
+            STOCK_B: KLINE_B,
+        }[code],
+        "get_dividend_history": lambda code: {
+            STOCK_A: DIVIDENDS_A,
+            STOCK_B: DIVIDENDS_B,
+        }[code],
+        "get_industry_pe_pb": lambda code, cache_dir, cache_days=7: INDUSTRY[code],
+        "get_fund_quotes": lambda fund_type: FUND_QUOTES,
+        "get_fund_nav_history": lambda code, fund_type, days=120: FUND_NAV,
+        "get_fund_dividend_history": lambda code: FUND_DIVIDENDS,
+        "get_fund_overview": lambda code: {
+            "scale": "222.76亿元（截止至：2026年06月30日）",
+            "tracker": "上证红利指数",
+        },
+        "resolve_index_symbol": lambda configured, tracker: "上证红利",
+        "get_index_pe_history": lambda symbol: INDEX_PE,
+        **extra,
+    }
+
+
+def _section_rows(report, header):
+    """取 ``header`` 段落的数据行（跳过表头与分隔线，遇下一段落/摘要停止）。"""
+    lines = report.splitlines()
+    rows = []
+    for line in lines[lines.index(header) + 1 :]:
+        stripped = line.strip()
+        if stripped in ("【股票】", "【基金】") or stripped.startswith("扫描"):
+            break
+        if not stripped or stripped.startswith("排名") or set(stripped) <= set("- "):
+            continue
+        rows.append(line)
+    return rows
+
+
+def _row_for(report, text):
+    matches = [line for line in report.splitlines() if text in line]
+    assert len(matches) == 1, f"{text!r} 在报告中出现 {len(matches)} 次"
+    return matches[0]
+
+
+def test_run_happy_path_reports_all_instruments_sorted_by_total(monkeypatch, tmp_path):
+    _patch_data(monkeypatch, **_happy_overrides())
+
+    report = main.run(config_dir=CONFIG_DIR, cache_dir=tmp_path, as_of=AS_OF)
+
+    stock_rows = _section_rows(report, "【股票】")
+    assert len(stock_rows) == 2
+    assert "平安银行" in stock_rows[0] and "92.5" in stock_rows[0]
+    assert "招商银行" in stock_rows[1] and "25.0" in stock_rows[1]
+
+    fund_rows = _section_rows(report, "【基金】")
+    assert len(fund_rows) == 1
+    assert "红利ETF" in fund_rows[0] and "75.0" in fund_rows[0]
+    assert "510880" in fund_rows[0]
+
+    assert "扫描 3 只标的（股票 2 / 基金 1），数据不足 0" in report
+
+
+def test_run_stock_missing_from_spot_table_still_scored(monkeypatch, tmp_path):
+    spot = SPOT[SPOT["code"] != STOCK_A].reset_index(drop=True)
+    _patch_data(monkeypatch, **_happy_overrides(get_stock_spot=lambda: spot))
+
+    report = main.run(config_dir=CONFIG_DIR, cache_dir=tmp_path, as_of=AS_OF)
+
+    row = _row_for(report, "平安银行")
+    # 价格缺失 → 股息率/派息率/PE/PB/均线位置不可评分；分红年数(1.0)与 5 日动量(0.5) 仍打分：
+    # (20 + 0.5×5) / (20+5) × 100 = 90.0
+    assert "90.0" in row and "连续分红" in row
+    assert "N/A" not in row and "数据不足" not in row
+    assert "招商银行" in report  # 其他标的照常
+
+
+def test_run_kline_failure_keeps_other_indicators_scoring(monkeypatch, tmp_path):
+    def failing_kline(code, days=120, as_of=None):
+        if code == STOCK_B:
+            raise ConnectionError("模拟行情接口失败")
+        return KLINE_A
+
+    _patch_data(monkeypatch, **_happy_overrides(get_kline=failing_kline))
+
+    report = main.run(config_dir=CONFIG_DIR, cache_dir=tmp_path, as_of=AS_OF)
+
+    row = _row_for(report, "招商银行")
+    # K 线缺失 → 均线/动量/技术面不可评分；分红与估值类仍打分：
+    # (0.5×15 + 0.5×10) / (30+20+10+15+10) × 100 = 14.7
+    assert "14.7" in row
+    assert "N/A" not in row and "数据不足" not in row
+    assert "平安银行" in report and "红利ETF" in report  # 其余标的不受影响
+
+
+def test_run_all_sources_failing_reports_insufficient_data(monkeypatch, tmp_path):
+    _patch_data(monkeypatch)  # 所有数据源返回 None
+
+    report = main.run(config_dir=CONFIG_DIR, cache_dir=tmp_path, as_of=AS_OF)
+
+    for name in ("平安银行", "招商银行", "红利ETF"):
+        row = _row_for(report, name)
+        assert "N/A" in row and "数据不足" in row
+    assert "数据不足 3" in report
+
+
+def test_run_passes_data_rules_and_as_of_through(monkeypatch, tmp_path):
+    calls = {"kline": [], "industry": [], "nav": [], "quotes": [], "symbol": []}
+
+    def get_kline(code, days=120, as_of=None):
+        calls["kline"].append((code, days, as_of))
+        return KLINE_A
+
+    def get_industry_pe_pb(code, cache_dir, cache_days=7):
+        calls["industry"].append((code, cache_dir, cache_days))
+        return {"industry": "银行", "pe": 10.0, "pb": 1.0}
+
+    def get_fund_nav_history(code, fund_type, days=120):
+        calls["nav"].append((code, fund_type, days))
+        return None
+
+    def get_fund_quotes(fund_type):
+        calls["quotes"].append(fund_type)
+        return FUND_QUOTES
+
+    def resolve_index_symbol(configured, tracker):
+        calls["symbol"].append((configured, tracker))
+        return None
+
+    _patch_data(
+        monkeypatch,
+        **_happy_overrides(
+            get_kline=get_kline,
+            get_industry_pe_pb=get_industry_pe_pb,
+            get_fund_nav_history=get_fund_nav_history,
+            get_fund_quotes=get_fund_quotes,
+            resolve_index_symbol=resolve_index_symbol,
+        ),
+    )
+
+    main.run(config_dir=CONFIG_DIR, cache_dir=tmp_path, as_of=AS_OF)
+
+    assert calls["kline"] == [(STOCK_A, 120, AS_OF), (STOCK_B, 120, AS_OF)]
+    assert calls["industry"] == [
+        (STOCK_A, tmp_path, 7),
+        (STOCK_B, tmp_path, 7),
+    ]
+    assert calls["nav"] == [(FUND_CODE, "etf", 120)]
+    assert calls["quotes"] == ["etf"]  # 每种基金类型只拉一次行情
+    assert calls["symbol"] == [("上证红利", "上证红利指数")]
+
+
+def test_main_prints_report_and_returns_zero(monkeypatch, capsys):
+    monkeypatch.setattr(main, "run", lambda: "扫描 0 只标的")
+
+    assert main.main() == 0
+
+    captured = capsys.readouterr()
+    assert "扫描 0 只标的" in captured.out
+
+
+def test_main_reports_config_error_and_returns_one(monkeypatch, capsys):
+    def failing_run():
+        raise config.ConfigError("stocks.yaml: 配置文件不存在")
+
+    monkeypatch.setattr(main, "run", failing_run)
+
+    assert main.main() == 1
+
+    captured = capsys.readouterr()
+    assert "stocks.yaml: 配置文件不存在" in captured.err
