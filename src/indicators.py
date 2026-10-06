@@ -77,3 +77,93 @@ def calc_pb_vs_industry(
     if stock_pb is None or industry_pb is None or industry_pb == 0:
         return None
     return (stock_pb - industry_pb) / industry_pb * 100.0
+
+
+# ---------------------------------------------------------------------------
+# 技术指标（K 线帧规范列：date（datetime64，升序）、close（float））
+# ---------------------------------------------------------------------------
+
+
+def calc_ma(kline: pd.DataFrame | None, window: int = 60) -> float | None:
+    """最后 window 根收盘价的均值（默认 MA60）；kline 为 None 或行数不足 → None。"""
+    if kline is None or len(kline) < window:
+        return None
+    return float(kline["close"].tail(window).mean())
+
+
+def calc_ma60_position(close: float | None, ma60: float | None) -> float | None:
+    """收盘价相对 MA60 的偏离度（%）= (close - ma60) / ma60 × 100。
+
+    任一缺失或 ma60 为 0 → None。
+    """
+    if close is None or ma60 is None or ma60 == 0:
+        return None
+    return (close - ma60) / ma60 * 100.0
+
+
+def calc_momentum_5d(kline: pd.DataFrame | None) -> float | None:
+    """5 日动量（%）= (close[-1] - close[-6]) / close[-6] × 100；不足 6 行 → None。"""
+    if kline is None or len(kline) < 6:
+        return None
+    closes = kline["close"]
+    base = float(closes.iloc[-6])
+    if base == 0:
+        return None
+    return (float(closes.iloc[-1]) - base) / base * 100.0
+
+
+def calc_macd(kline: pd.DataFrame | None) -> dict | None:
+    """MACD：DIF = EMA(close,12) - EMA(close,26)，DEA = EMA(DIF,9)，hist = 2×(DIF-DEA)。
+
+    signal 为最后一根相对上一根 DIF-DEA 的变号结果：金叉 / 死叉 / ""（未变号）。
+    kline 为 None 或不足 26 行 → None。
+
+    EMA12/EMA26 从首根 K 线起算：若两者也用 min_periods=12/26，DIF 要到第 26 根才
+    有效，再叠加 DEA 的 min_periods=9，DEA 需 34 根才有值，与「不足 26 行返回 None」
+    的边界及 31 根的测试输入不符。
+    """
+    if kline is None or len(kline) < 26:
+        return None
+
+    close = kline["close"].astype(float)
+    ema12 = close.ewm(span=12, adjust=False, min_periods=1).mean()
+    ema26 = close.ewm(span=26, adjust=False, min_periods=1).mean()
+    dif = ema12 - ema26
+    dea = dif.ewm(span=9, adjust=False, min_periods=9).mean()
+    hist = 2.0 * (dif - dea)
+
+    prev_diff = float(dif.iloc[-2] - dea.iloc[-2])
+    last_diff = float(dif.iloc[-1] - dea.iloc[-1])
+    if prev_diff <= 0 < last_diff:
+        signal = "金叉"
+    elif prev_diff >= 0 > last_diff:
+        signal = "死叉"
+    else:
+        signal = ""
+
+    return {
+        "dif": float(dif.iloc[-1]),
+        "dea": float(dea.iloc[-1]),
+        "hist": float(hist.iloc[-1]),
+        "signal": signal,
+    }
+
+
+def calc_rsi(kline: pd.DataFrame | None, period: int = 14) -> float | None:
+    """RSI（Wilder 平滑，alpha = 1/period）；kline 为 None 或不足 period+1 行 → None。"""
+    if kline is None or len(kline) < period + 1:
+        return None
+
+    close = kline["close"].astype(float)
+    delta = close.diff()
+    gain = delta.clip(lower=0.0)
+    loss = (-delta).clip(lower=0.0)
+    avg_gain = gain.ewm(alpha=1.0 / period, adjust=False).mean().iloc[-1]
+    avg_loss = loss.ewm(alpha=1.0 / period, adjust=False).mean().iloc[-1]
+
+    if avg_loss == 0:
+        return 100.0
+    if avg_gain == 0:
+        return 0.0
+    rs = avg_gain / avg_loss
+    return float(100.0 - 100.0 / (1.0 + rs))
