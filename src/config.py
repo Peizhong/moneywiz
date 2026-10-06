@@ -64,8 +64,8 @@ def _load_yaml(path: Path) -> Any:
     try:
         with path.open(encoding="utf-8") as fh:
             data = yaml.safe_load(fh)
-    except yaml.YAMLError as exc:
-        raise ConfigError(f"{path}: YAML 解析失败: {exc}") from exc
+    except (yaml.YAMLError, OSError, UnicodeDecodeError) as exc:
+        raise ConfigError(f"{path}: 读取或解析失败: {exc}") from exc
     if data is None:
         raise ConfigError(f"{path}: 文件内容为空")
     return data

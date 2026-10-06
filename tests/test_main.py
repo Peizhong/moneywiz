@@ -329,6 +329,44 @@ def test_run_passes_data_rules_and_as_of_through(monkeypatch, config_dir, tmp_pa
     assert calls["symbol"] == [("上证红利", "上证红利指数")]
 
 
+def test_run_list_valued_index_degrades_instead_of_aborting(monkeypatch, tmp_path):
+    # 用户把 funds.yaml 的 index 写成多元素列表：真实 resolve_index_symbol 内部
+    # pd.isna 对数组取真值会抛 ValueError，必须被 _fetch 捕获并降级为
+    # 「指数估值缺数据」，其余指标与标的不受影响。
+    funds = {
+        "funds": [
+            {
+                "code": FUND_CODE,
+                "name": "红利ETF",
+                "type": "etf",
+                "index": ["上证红利", "中证红利"],
+            }
+        ]
+    }
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    for filename, payload in (
+        ("stocks.yaml", STOCKS_CONFIG),
+        ("funds.yaml", funds),
+        ("rules.yaml", RULES_CONFIG),
+    ):
+        (config_dir / filename).write_text(
+            yaml.safe_dump(payload, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+    _patch_data(
+        monkeypatch,
+        **_happy_overrides(resolve_index_symbol=data.resolve_index_symbol),
+    )
+
+    report = main.run(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
+
+    fund_row = _row_for(report, "红利ETF")
+    assert "N/A" not in fund_row  # 指数 PE 之外的 4 个指标仍打分
+    assert "4/5" in fund_row
+    assert "平安银行" in report  # 股票不受基金配置问题影响
+
+
 def test_main_prints_report_and_returns_zero(monkeypatch, capsys):
     monkeypatch.setattr(main, "run", lambda: "扫描 0 只标的")
 

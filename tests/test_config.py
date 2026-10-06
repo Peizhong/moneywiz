@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from src.config import ConfigError, FundCfg, StockCfg, load_config
+from src.config import FUND_TYPES, ConfigError, FundCfg, StockCfg, load_config
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -149,9 +149,20 @@ def test_fund_index_defaults_to_none(tmp_path):
 
 
 def test_load_real_project_config():
+    # 只校验 schema 与字段形状，不断言自选列表内容——
+    # README 指导用户自行维护 config/，断言内容会随预期使用而变红。
     cfg = load_config(PROJECT_ROOT / "config")
 
     assert cfg.rules["data"]["pe_cache_days"] == 7
-    assert [s.code for s in cfg.stocks] == ["000001", "600036"]
-    assert cfg.funds[0].code == "510880"
-    assert cfg.output["avoid_bottom_n"] == 5
+    assert all(s.code and s.name for s in cfg.stocks)
+    assert all(f.code and f.name and f.type in FUND_TYPES for f in cfg.funds)
+
+
+def test_non_utf8_config_raises_config_error(tmp_path):
+    config_dir = _write_config(tmp_path)
+    (config_dir / "stocks.yaml").write_bytes(b"\xff\xfe not valid utf-8")
+
+    with pytest.raises(ConfigError) as excinfo:
+        load_config(config_dir)
+
+    assert "stocks.yaml" in str(excinfo.value)

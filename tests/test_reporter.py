@@ -63,6 +63,64 @@ FUND_70 = {
     "missing": [],
 }
 
+STOCK_PARTIAL = _result(
+    "000002",
+    "部分覆盖",
+    87.5,
+    scores={"dividend_yield": 1.0},
+    missing=[
+        "dividend_years",
+        "payout_ratio",
+        "pe_vs_industry",
+        "pb_vs_industry",
+        "ma60_position",
+        "momentum_5d",
+    ],
+)
+STOCK_FULL = _result(
+    "600000",
+    "全覆盖",
+    50.0,
+    scores={
+        "dividend_yield": 1.0,
+        "dividend_years": 0.5,
+        "payout_ratio": 1.0,
+        "pe_vs_industry": 0.5,
+        "pb_vs_industry": 1.0,
+        "ma60_position": 0.5,
+        "momentum_5d": 1.0,
+    },
+)
+STOCK_UNSCORED = _result(
+    "600001",
+    "全缺失",
+    None,
+    scores={},
+    missing=[
+        "dividend_yield",
+        "dividend_years",
+        "payout_ratio",
+        "pe_vs_industry",
+        "pb_vs_industry",
+        "ma60_position",
+        "momentum_5d",
+    ],
+)
+FUND_UNSCORED = {
+    "code": "510881",
+    "name": "无分基金",
+    "total": None,
+    "values": {},
+    "scores": {},
+    "missing": [
+        "discount_rate",
+        "nav_trend_20d",
+        "index_pe_vs_history",
+        "dividend_frequency",
+        "fund_size",
+    ],
+}
+
 
 def _table_rows(report, header):
     """取出 ``header`` 段落表格的数据行（跳过表头与分隔线，遇下一段落停止）。"""
@@ -140,6 +198,34 @@ def test_render_report_fund_table_and_summary():
     assert "扫描 4 只标的（股票 3 / 基金 1）" in report
     assert "数据不足 1" in report
     assert "耗时 3.2s" in report
+
+
+def test_render_report_partial_coverage_disclosed():
+    report = render_report([STOCK_PARTIAL], [], OUTPUT_CFG, 1.0)
+
+    row = _table_rows(report, STOCK_HEADER)[0]
+    assert "87.5" in row and "1/7" in row
+    assert "指标不全 1" in report
+
+
+def test_render_report_full_coverage_has_no_partial_count():
+    report = render_report([STOCK_FULL], [], OUTPUT_CFG, 1.0)
+
+    row = _table_rows(report, STOCK_HEADER)[0]
+    assert "50.0" in row and "7/7" in row
+    assert "指标不全 0" in report
+
+
+def test_render_report_unscored_coverage_is_zero_of_all():
+    report = render_report([STOCK_UNSCORED], [FUND_UNSCORED], OUTPUT_CFG, 0.0)
+
+    stock_row = _table_rows(report, STOCK_HEADER)[0]
+    fund_row = _table_rows(report, FUND_HEADER)[0]
+    assert "N/A" in stock_row and "0/7" in stock_row
+    assert "N/A" in fund_row and "0/5" in fund_row
+    # 完全不可评分的标的不计入「指标不全」，只计入「数据不足」
+    assert "数据不足 2" in report
+    assert "指标不全 0" in report
 
 
 def test_render_report_sorts_none_last_and_ties_by_code():

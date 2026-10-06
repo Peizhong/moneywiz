@@ -165,7 +165,10 @@ def _fund_result(fund, quotes, as_of, kline_days, rules_section):
     )
     tracker = overview["tracker"] if overview is not None else None
     scale = overview["scale"] if overview is not None else None
-    index_symbol = data.resolve_index_symbol(fund.index, tracker)
+    index_symbol = _fetch(
+        lambda: data.resolve_index_symbol(fund.index, tracker),
+        f"resolve_index_symbol({fund.code})",
+    )
     pe_history = (
         _fetch(
             lambda: data.get_index_pe_history(index_symbol),

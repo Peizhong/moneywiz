@@ -33,7 +33,7 @@ STOCK_HEADER = "【股票】"
 FUND_HEADER = "【基金】"
 EMPTY_SECTION = "(无)"
 NO_SCORE_SIGNAL = "数据不足"
-COLUMNS = ["排名", "代码", "名称", "总分", "信号", "亮点", "风险", "技术"]
+COLUMNS = ["排名", "代码", "名称", "总分", "覆盖", "信号", "亮点", "风险", "技术"]
 
 
 def signal_for(
@@ -60,11 +60,17 @@ def render_report(
     elapsed_s: float,
 ) -> str:
     """渲染完整报告：股票表、基金表、摘要行，以换行连接。"""
-    total = len(stock_results) + len(fund_results)
-    no_score = sum(1 for r in (*stock_results, *fund_results) if r["total"] is None)
+    all_results = (*stock_results, *fund_results)
+    total = len(all_results)
+    no_score = sum(1 for r in all_results if r["total"] is None)
+    partial = sum(
+        1
+        for r in all_results
+        if r["total"] is not None and (r.get("missing") or [])
+    )
     summary = (
         f"扫描 {total} 只标的（股票 {len(stock_results)} / 基金 {len(fund_results)}），"
-        f"数据不足 {no_score}，耗时 {elapsed_s:.1f}s"
+        f"数据不足 {no_score}，指标不全 {partial}，耗时 {elapsed_s:.1f}s"
     )
     return "\n".join(
         [
@@ -95,6 +101,7 @@ def _table(results: list[dict], output_cfg: dict) -> str:
                 item["code"],
                 item["name"],
                 f"{total:.1f}" if has_score else "N/A",
+                _coverage_text(scores, item.get("missing")),
                 signal_for(
                     rank,
                     len(results),
@@ -108,6 +115,12 @@ def _table(results: list[dict], output_cfg: dict) -> str:
             ]
         )
     return tabulate(rows, headers=COLUMNS, tablefmt="simple", floatfmt=".1f")
+
+
+def _coverage_text(scores: dict | None, missing: list[str] | None) -> str:
+    """已评分/应有指标数，如 ``1/7``；``scores`` 为 None/缺席时按 0 个已评分计。"""
+    scored = len(scores or {})
+    return f"{scored}/{scored + len(missing or [])}"
 
 
 def _sorted_results(results: list[dict]) -> list[dict]:
