@@ -1,10 +1,18 @@
 import copy
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 import yaml
 
-from src.config import FUND_TYPES, ConfigError, FundCfg, StockCfg, load_config
+from src.config import (
+    FUND_TYPES,
+    ConfigError,
+    ConstituentCfg,
+    FundCfg,
+    StockCfg,
+    load_config,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -39,15 +47,27 @@ FUNDS = {
     ]
 }
 
+CONSTITUENTS = {
+    "index_code": "000015",
+    "updated_at": "2026-10-06T12:00:00",
+    "constituents": [
+        {"code": "600015", "name": "华夏银行"},
+        {"code": "601088", "name": "中国神华", "added": "2026-10-01"},
+    ],
+}
 
-def _write_config(tmp_path, *, stocks=STOCKS, funds=FUNDS, rules=RULES):
-    """把给定内容写成 config/ 下的三个 YAML 文件，传入 None 表示不写该文件。"""
+
+def _write_config(
+    tmp_path, *, stocks=STOCKS, funds=FUNDS, rules=RULES, constituents=CONSTITUENTS
+):
+    """把给定内容写成 config/ 下的四个 YAML 文件，传入 None 表示不写该文件。"""
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     for filename, data in (
         ("stocks.yaml", stocks),
         ("funds.yaml", funds),
         ("rules.yaml", rules),
+        ("dividend_index.yaml", constituents),
     ):
         if data is not None:
             (config_dir / filename).write_text(
@@ -140,7 +160,32 @@ def test_output_defaults_when_section_absent(tmp_path):
         "kline_days": 120,
         "pe_cache_days": 7,
         "financial_cache_days": 30,
+        "index_refresh_days": 14,
     }
+
+
+def test_load_config_parses_index_constituents(tmp_path):
+    cfg = load_config(_write_config(tmp_path))
+
+    assert cfg.index_code == "000015"
+    assert cfg.constituents_updated_at == datetime.fromisoformat("2026-10-06T12:00:00")
+    assert cfg.constituents == [
+        ConstituentCfg(code="600015", name="华夏银行", added=None),
+        ConstituentCfg(code="601088", name="中国神华", added="2026-10-01"),
+    ]
+
+
+def test_missing_constituents_file_raises_config_error(tmp_path):
+    with pytest.raises(ConfigError, match="dividend_index"):
+        load_config(_write_config(tmp_path, constituents=None))
+
+
+def test_invalid_constituents_updated_at_raises_config_error(tmp_path):
+    bad = copy.deepcopy(CONSTITUENTS)
+    bad["updated_at"] = "not-a-date"
+
+    with pytest.raises(ConfigError, match="updated_at"):
+        load_config(_write_config(tmp_path, constituents=bad))
 
 
 def test_fund_index_defaults_to_none(tmp_path):
@@ -159,6 +204,8 @@ def test_load_real_project_config():
 
     assert cfg.rules["data"]["pe_cache_days"] == 7
     assert cfg.rules["data"]["financial_cache_days"] == 30
+    assert cfg.index_code == "000015"
+    assert cfg.constituents and all(c.code and c.name for c in cfg.constituents)
     assert all(s.code and s.name for s in cfg.stocks)
     assert all(f.code and f.name and f.type in FUND_TYPES for f in cfg.funds)
 

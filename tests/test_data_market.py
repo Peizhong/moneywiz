@@ -7,7 +7,11 @@ import akshare as ak
 import pandas as pd
 import pytest
 
-from src.data import get_10y_bond_yield, get_index_dividend_yield
+from src.data import (
+    get_10y_bond_yield,
+    get_index_constituents,
+    get_index_dividend_yield,
+)
 
 
 def _index_value_frame():
@@ -76,3 +80,41 @@ def test_bond_yield_failure_returns_none(monkeypatch):
     monkeypatch.setattr(ak, "bond_zh_us_rate", boom)
 
     assert get_10y_bond_yield() is None
+
+
+def _constituents_frame():
+    """index_stock_cons_csindex 原始列名的最小帧（含一条重复代码）。"""
+    return pd.DataFrame(
+        {
+            "日期": ["2026-09-30"] * 3,
+            "指数代码": ["000015"] * 3,
+            "成分券代码": ["601088", "600015", "601088"],
+            "成分券名称": ["中国神华", "华夏银行", "中国神华"],
+        }
+    )
+
+
+def test_index_constituents_dedup_and_sorted(monkeypatch):
+    calls = []
+
+    def fake(symbol):
+        calls.append(symbol)
+        return _constituents_frame()
+
+    monkeypatch.setattr(ak, "index_stock_cons_csindex", fake)
+
+    out = get_index_constituents("000015")
+
+    assert list(out.columns) == ["code", "name"]
+    assert out["code"].tolist() == ["600015", "601088"]  # 去重且按代码升序
+    assert out["name"].tolist() == ["华夏银行", "中国神华"]
+    assert calls == ["000015"]
+
+
+def test_index_constituents_failure_returns_none(monkeypatch):
+    def boom(symbol):
+        raise ConnectionError("网络超时")
+
+    monkeypatch.setattr(ak, "index_stock_cons_csindex", boom)
+
+    assert get_index_constituents("000015") is None

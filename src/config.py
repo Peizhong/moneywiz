@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -16,10 +17,16 @@ DEFAULT_DATA: dict[str, int] = {
     "kline_days": 120,
     "pe_cache_days": 7,
     "financial_cache_days": 30,
+    "index_refresh_days": 14,
 }
 DEFAULT_OUTPUT: dict[str, int] = {"buy_top_n": 5, "avoid_bottom_n": 5}
 
-FILENAMES = {"stocks": "stocks.yaml", "funds": "funds.yaml", "rules": "rules.yaml"}
+FILENAMES = {
+    "stocks": "stocks.yaml",
+    "funds": "funds.yaml",
+    "rules": "rules.yaml",
+    "constituents": "dividend_index.yaml",
+}
 
 
 class ConfigError(Exception):
@@ -41,15 +48,25 @@ class FundCfg:
 
 
 @dataclass
+class ConstituentCfg:
+    code: str
+    name: str
+    added: str | None = None  # 加入指数成分的日期（YYYY-MM-DD，自动刷新时写入）
+
+
+@dataclass
 class Config:
     stocks: list[StockCfg]
     funds: list[FundCfg]
     rules: dict
     output: dict
+    index_code: str
+    constituents: list[ConstituentCfg]
+    constituents_updated_at: datetime
 
 
 def load_config(config_dir: Path = Path("config")) -> Config:
-    """读取 config_dir 下的 stocks.yaml / funds.yaml / rules.yaml 并校验。"""
+    """读取 config_dir 下的四个 YAML（自选/基金/规则/指数成分股）并校验。"""
     config_dir = Path(config_dir)
     raw = {
         key: _load_yaml(config_dir / filename)
@@ -59,7 +76,54 @@ def load_config(config_dir: Path = Path("config")) -> Config:
     stocks = _parse_stocks(config_dir / FILENAMES["stocks"], raw["stocks"])
     funds = _parse_funds(config_dir / FILENAMES["funds"], raw["funds"])
     rules, output = _parse_rules(config_dir / FILENAMES["rules"], raw["rules"])
-    return Config(stocks=stocks, funds=funds, rules=rules, output=output)
+    index_code, constituents, updated_at = _parse_constituents(
+        config_dir / FILENAMES["constituents"], raw["constituents"]
+    )
+    return Config(
+        stocks=stocks,
+        funds=funds,
+        rules=rules,
+        output=output,
+        index_code=index_code,
+        constituents=constituents,
+        constituents_updated_at=updated_at,
+    )
+
+
+def _parse_constituents(path: Path, data: Any) -> tuple[str, list[ConstituentCfg], datetime]:
+    """校验 dividend_index.yaml：index_code、updated_at、constituents（code/name/可选 added）。"""
+    if not isinstance(data, dict):
+        raise ConfigError(f"{path}: 顶层必须是映射，实际为 {type(data).__name__}")
+    index_code = data.get("index_code")
+    if not isinstance(index_code, str) or not index_code:
+        raise ConfigError(f"{path}: 'index_code' 缺失或不是非空字符串")
+
+    updated_raw = data.get("updated_at")
+    try:
+        updated_at = datetime.fromisoformat(str(updated_raw))
+    except ValueError as exc:
+        raise ConfigError(
+            f"{path}: 'updated_at' 缺失或不是 ISO 时间格式（实际为 {updated_raw!r}）"
+        ) from exc
+
+    items = _list_section(path, "constituents", data)
+    constituents = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise ConfigError(f"{path}: constituents 的每项必须是映射")
+        code = _required_str(path, item, "code", "成分股 code")
+        name = _required_str(path, item, "name", "成分股 name")
+        added = item.get("added")
+        if added is not None:
+            try:
+                date.fromisoformat(str(added))
+            except ValueError as exc:
+                raise ConfigError(
+                    f"{path}: 成分股 {code} 的 'added' 不是 YYYY-MM-DD 日期（{added!r}）"
+                ) from exc
+            added = str(added)
+        constituents.append(ConstituentCfg(code=code, name=name, added=added))
+    return index_code, constituents, updated_at
 
 
 def _load_yaml(path: Path) -> Any:

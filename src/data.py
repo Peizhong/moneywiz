@@ -766,3 +766,23 @@ def get_10y_bond_yield(days: int = 90) -> float | None:
     if values.empty:
         return None
     return float(values.iloc[-1])
+
+
+def get_index_constituents(index_code: str) -> pd.DataFrame | None:
+    """中证指数官网成分股，归一为 ``code, name``（去重、按代码升序）；失败 → None。"""
+    raw = _call(ak.index_stock_cons_csindex, symbol=index_code)
+    if raw is None:
+        return None
+    if raw.empty:
+        return pd.DataFrame(columns=["code", "name"])
+    frame = pd.DataFrame(
+        {
+            "code": raw["成分券代码"].astype(str),
+            "name": raw["成分券名称"].astype(str),
+        }
+    )
+    return (
+        frame.drop_duplicates(subset=["code"])
+        .sort_values("code")
+        .reset_index(drop=True)
+    )

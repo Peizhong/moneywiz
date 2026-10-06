@@ -13,7 +13,7 @@ import pytest
 import yaml
 
 import main
-from src import config, data
+from src import config, constituents, data
 
 AS_OF = date(2026, 10, 6)
 
@@ -86,15 +86,23 @@ DATA_FUNCTIONS = (
 )
 
 
+CONSTITUENTS_CONFIG = {
+    "index_code": "000015",
+    "updated_at": "2026-10-06T12:00:00",
+    "constituents": [{"code": "601088", "name": "中国神华"}],
+}
+
+
 @pytest.fixture
 def config_dir(tmp_path):
-    """把自选列表与规则写入临时配置目录，并返回该目录。"""
+    """把自选列表、规则与成分股写入临时配置目录，并返回该目录。"""
     directory = tmp_path / "config"
     directory.mkdir()
     for filename, payload in (
         ("stocks.yaml", STOCKS_CONFIG),
         ("funds.yaml", FUNDS_CONFIG),
         ("rules.yaml", RULES_CONFIG),
+        ("dividend_index.yaml", CONSTITUENTS_CONFIG),
     ):
         (directory / filename).write_text(
             yaml.safe_dump(payload, allow_unicode=True, sort_keys=False),
@@ -166,10 +174,21 @@ INDEX_PE = pd.DataFrame(
 )
 
 
-def _patch_data(monkeypatch, **overrides):
-    """替换 src.data 的全部对外函数；未指定的返回 None（模拟获取失败）。"""
+def _patch_data(monkeypatch, constituents_result=None, **overrides):
+    """替换 src.data 的全部对外函数；未指定的返回 None（模拟获取失败）。
+
+    成分股刷新一并打桩（constituents_result 为返回的有效名单，默认空）。
+    """
     for name in DATA_FUNCTIONS:
         monkeypatch.setattr(data, name, overrides.get(name, lambda *a, **k: None))
+    stub = {
+        "refreshed": False,
+        "added": [],
+        "removed": [],
+        "error": None,
+        "constituents": constituents_result or [],
+    }
+    monkeypatch.setattr(constituents, "refresh_constituents", lambda *a, **k: stub)
 
 
 def _happy_overrides(**extra):
@@ -283,6 +302,35 @@ def test_run_kline_failure_keeps_other_indicators_scoring(
     assert "14.7" in row
     assert "N/A" not in row and "数据不足" not in row
     assert "平安银行" in report and "红利ETF" in report  # 其余标的不受影响
+
+
+def test_run_merges_constituents_and_marks_new(monkeypatch, config_dir, tmp_path):
+    entries = [
+        {"code": STOCK_A, "name": "平安银行"},  # 与自选重叠 → 不重复扫描
+        {"code": "601088", "name": "中国神华", "added": date.today().isoformat()},
+    ]
+    _patch_data(
+        monkeypatch, constituents_result=entries, **_happy_overrides()
+    )
+
+    report = main.run(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
+
+    assert "中国神华(新增)" in report  # 新增成分股在报告里带标记
+    # 自选 2 只 + 新成分股 1 只（重叠的平安银行不重复）+ 基金 1 只
+    assert "扫描 4 只标的（股票 3 / 基金 1）" in report
+    assert report.count("平安银行") == 1
+
+
+def test_run_omits_marker_for_old_constituents(monkeypatch, config_dir, tmp_path):
+    entries = [
+        {"code": "601088", "name": "中国神华", "added": "2026-01-01"},  # 早已加入
+    ]
+    _patch_data(monkeypatch, constituents_result=entries, **_happy_overrides())
+
+    report = main.run(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
+
+    assert "中国神华" in report
+    assert "(新增)" not in report
 
 
 def test_run_surfaces_sustainability_warnings(monkeypatch, config_dir, tmp_path):
@@ -432,6 +480,7 @@ def test_run_list_valued_index_degrades_instead_of_aborting(monkeypatch, tmp_pat
         ("stocks.yaml", STOCKS_CONFIG),
         ("funds.yaml", funds),
         ("rules.yaml", RULES_CONFIG),
+        ("dividend_index.yaml", CONSTITUENTS_CONFIG),
     ):
         (config_dir / filename).write_text(
             yaml.safe_dump(payload, allow_unicode=True, sort_keys=False),

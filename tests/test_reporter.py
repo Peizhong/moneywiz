@@ -383,6 +383,19 @@ def test_negative_operating_cash_flow_warning():
     assert "盈利下滑" not in row  # 增长为正不提示
 
 
+def test_new_constituent_marker_in_name():
+    result = _result("601088", "中国神华", 80.0, scores={"dividend_yield": 1.0})
+    result["new_constituent"] = True
+
+    row = _table_rows(render_report([result], [], OUTPUT_CFG, 1.0), STOCK_HEADER)[0]
+
+    assert "中国神华(新增)" in row
+
+    result["new_constituent"] = False
+    row = _table_rows(render_report([result], [], OUTPUT_CFG, 1.0), STOCK_HEADER)[0]
+    assert "中国神华" in row and "(新增)" not in row
+
+
 def test_market_header_rendered_before_tables():
     report = render_report([STOCK_80], [], OUTPUT_CFG, 1.0, market=MARKET)
 

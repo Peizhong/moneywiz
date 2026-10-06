@@ -14,7 +14,7 @@ import time
 from datetime import date
 from pathlib import Path
 
-from src import config, data, indicators, scorer, reporter
+from src import config, constituents, data, indicators, reporter, scorer
 
 logger = logging.getLogger(__name__)
 
@@ -178,6 +178,20 @@ def _fetch_fund_quotes(cfg_funds):
     return quotes
 
 
+def _scan_stocks(watchlist, constituent_entries):
+    """扫描清单 = 自选 ∪ 成分股（按代码去重；自选优先，保留其名称）。"""
+    stocks = list(watchlist)
+    known = {stock.code for stock in stocks}
+    for entry in constituent_entries:
+        code = str(entry.get("code") or "")
+        if code and code not in known:
+            stocks.append(
+                config.StockCfg(code=code, name=str(entry.get("name") or code))
+            )
+            known.add(code)
+    return stocks
+
+
 def _market_context():
     """板块温度计：中证红利股息率、10Y 国债收益率、利差、上证红利 PE 分位。
 
@@ -283,15 +297,27 @@ def run(
     kline_days = cfg.rules["data"]["kline_days"]
     pe_cache_days = cfg.rules["data"]["pe_cache_days"]
 
+    refresh_days = cfg.rules["data"]["index_refresh_days"]
+    refresh = constituents.refresh_constituents(
+        config_dir / config.FILENAMES["constituents"],
+        cfg.index_code,
+        refresh_days,
+    )
+    if refresh["error"]:
+        logger.warning("成分股刷新失败（%s），沿用现有名单", refresh["error"])
+    new_codes = constituents.new_constituent_codes(refresh["constituents"], refresh_days)
+    scan_stocks = _scan_stocks(cfg.stocks, refresh["constituents"])
+
     spot = _fetch(
-        lambda: data.get_stock_spot([stock.code for stock in cfg.stocks]),
+        lambda: data.get_stock_spot([stock.code for stock in scan_stocks]),
         "get_stock_spot",
     )
     fund_quotes = _fetch_fund_quotes(cfg.funds)
     market = _market_context()
 
-    stock_results = [
-        _stock_result(
+    stock_results = []
+    for stock in scan_stocks:
+        result = _stock_result(
             stock,
             spot,
             cache_dir,
@@ -301,8 +327,8 @@ def run(
             cfg.rules["data"]["financial_cache_days"],
             cfg.rules["stocks"],
         )
-        for stock in cfg.stocks
-    ]
+        result["new_constituent"] = stock.code in new_codes
+        stock_results.append(result)
     fund_results = [
         _fund_result(
             fund,

@@ -144,11 +144,14 @@ def _table(results: list[dict], output_cfg: dict) -> str:
         values = item.get("values") or {}
         low_phrase, high_phrase = _position_phrases(item.get("position"))
         rank_text = f"{rank}(并列{tied_count})" if tied_count > 1 else str(rank)
+        name_text = item["name"]
+        if item.get("new_constituent"):
+            name_text = f"{name_text}(新增)"
         rows.append(
             [
                 rank_text,
                 item["code"],
-                item["name"],
+                name_text,
                 f"{total:.1f}" if has_score else "N/A",
                 _coverage_text(scores, item.get("missing")),
                 signal_for(
