@@ -14,6 +14,7 @@ from src.indicators import (
     calc_payout_ratio,
     calc_pb_vs_industry,
     calc_pe_vs_industry,
+    calc_ttm_dividend_per_share,
 )
 
 AS_OF = date(2026, 10, 6)
@@ -122,3 +123,21 @@ def test_pb_vs_industry(stock_pb, industry_pb, expected):
 @pytest.mark.parametrize("industry_pb", [None, 0])
 def test_pb_vs_industry_invalid_industry_pb_returns_none(industry_pb):
     assert calc_pb_vs_industry(1.0, industry_pb) is None
+
+
+def test_ttm_dividend_per_share_sums_trailing_window():
+    frame = _dividend_frame(
+        [("2024-05-01", 0.9), ("2026-01-16", 1.013), ("2026-07-10", 1.003)]
+    )
+
+    # 窗口内合计：1.013 + 1.003 = 2.016（与股息率的 TTM 口径一致）
+    assert calc_ttm_dividend_per_share(frame, AS_OF) == pytest.approx(2.016)
+
+
+def test_ttm_dividend_per_share_edge_cases():
+    assert calc_ttm_dividend_per_share(None, AS_OF) is None  # 获取失败不可评分
+    assert calc_ttm_dividend_per_share(_dividend_frame([]), AS_OF) == pytest.approx(0.0)
+    # 窗口外只有旧分红 → 0
+    assert calc_ttm_dividend_per_share(
+        _dividend_frame([("2024-05-01", 0.9)]), AS_OF
+    ) == pytest.approx(0.0)

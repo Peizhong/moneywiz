@@ -29,6 +29,23 @@ def calc_dividend_yield(
     return float(in_window.sum()) / price * 100.0
 
 
+def calc_ttm_dividend_per_share(
+    dividend_data: pd.DataFrame | None,
+    as_of: date,
+    window_days: int = 365,
+) -> float | None:
+    """近 window_days 天每股分红之和（元/股，税前）。
+
+    与 ``calc_dividend_yield`` 同一 TTM 窗口口径；None（获取失败）→ None；
+    空帧（无分红）或窗口内无分红 → 0.0。
+    """
+    if dividend_data is None:
+        return None
+    cutoff = pd.Timestamp(as_of) - pd.Timedelta(days=window_days)
+    in_window = dividend_data.loc[dividend_data["date"] > cutoff, "dividend_per_share"]
+    return float(in_window.sum())
+
+
 def calc_dividend_years(dividend_data: pd.DataFrame | None, as_of: date) -> int | None:
     """截至 as_of 的连续分红年数（从最近分红年份起逐年回数）。
 

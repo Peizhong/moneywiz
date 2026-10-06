@@ -675,6 +675,41 @@ def get_index_pe_history(index_symbol: str) -> pd.DataFrame | None:
 
 
 # ---------------------------------------------------------------------------
+# 分红可持续性（个股财务分析指标，新浪财经）
+# ---------------------------------------------------------------------------
+
+
+def get_financial_health(code: str) -> dict | None:
+    """个股年报口径的可持续性指标；失败或无年报行 → None。
+
+    来源 ``stock_financial_analysis_indicator``（新浪，按报告期升序），取最近一个
+    12-31 年报行：``净利润增长率(%)``、``每股经营性现金流(元)``、``股息发放率(%)``。
+    """
+    start_year = str(date.today().year - 3)
+    raw = _call(ak.stock_financial_analysis_indicator, symbol=code, start_year=start_year)
+    if raw is None or raw.empty or "日期" not in raw.columns:
+        return None
+    frame = raw.copy()
+    frame["日期"] = frame["日期"].astype(str)
+    annual = frame[frame["日期"].str.endswith("12-31")].sort_values("日期")
+    if annual.empty:
+        return None
+    latest = annual.iloc[-1]
+
+    def _value(column: str) -> float | None:
+        if column not in annual.columns:
+            return None
+        value = pd.to_numeric(latest[column], errors="coerce")
+        return None if pd.isna(value) else float(value)
+
+    return {
+        "eps_growth": _value("净利润增长率(%)"),
+        "op_cash_per_share": _value("每股经营性现金流(元)"),
+        "payout_stmt": _value("股息发放率(%)"),
+    }
+
+
+# ---------------------------------------------------------------------------
 # 市场温度计（板块股息率 / 10Y 国债收益率）
 # ---------------------------------------------------------------------------
 

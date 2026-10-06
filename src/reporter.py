@@ -63,13 +63,13 @@ def signal_for(
     avoid_bottom_n: int,
     has_score: bool,
 ) -> str:
-    """按排名给出信号：无分 → 数据不足；前 N → 买入；末尾 N → 回避；否则观察。"""
+    """按（并列）排名给出信号：无分 → 数据不足；前 N → 买入；末尾 N → 末位；否则观察。"""
     if not has_score:
         return NO_SCORE_SIGNAL
     if rank <= buy_top_n:
         return "买入"
     if rank > total_count - avoid_bottom_n:
-        return "回避"
+        return "末位"
     return "观察"
 
 
@@ -132,16 +132,21 @@ def _table(results: list[dict], output_cfg: dict) -> str:
         return EMPTY_SECTION
 
     rows = []
-    # 排名即表内位置，total_count 为表内标的总数；数据不足的标的排最后，
-    # 其信号由 has_score 直接判定为「数据不足」，不参与买入/回避名额。
-    for rank, item in enumerate(_sorted_results(results), start=1):
+    # 同分同名次（竞赛排名）：并列组共享名次与信号，边界同分不会被代码排序切开；
+    # 数据不足的标的排最后同属一组，信号由 has_score 直接判定为「数据不足」，
+    # 不参与买入/末位名额。
+    items = _sorted_results(results)
+    ranks = _competition_ranks(items)
+    for (rank, tied_count), item in zip(ranks, items):
         total = item["total"]
         has_score = total is not None
         scores = item.get("scores") or {}
+        values = item.get("values") or {}
         low_phrase, high_phrase = _position_phrases(item.get("position"))
+        rank_text = f"{rank}(并列{tied_count})" if tied_count > 1 else str(rank)
         rows.append(
             [
-                rank,
+                rank_text,
                 item["code"],
                 item["name"],
                 f"{total:.1f}" if has_score else "N/A",
@@ -153,12 +158,29 @@ def _table(results: list[dict], output_cfg: dict) -> str:
                     output_cfg["avoid_bottom_n"],
                     has_score,
                 ),
-                _detail_text(scores, item.get("values") or {}, 1.0, low_phrase),
-                _detail_text(scores, item.get("values") or {}, 0.0, high_phrase),
+                _detail_text(scores, values, 1.0, low_phrase),
+                _risk_text(scores, values, item.get("sustainability"), high_phrase),
                 _tech_text(item.get("tech")),
             ]
         )
     return tabulate(rows, headers=COLUMNS, tablefmt="simple", floatfmt=".1f")
+
+
+def _competition_ranks(items: list[dict]) -> list[tuple[int, int]]:
+    """竞赛排名：同 ``total`` 同属一组，返回每条的 ``(名次, 并列数)``。
+
+    名次为该并列组的起始位置；「数据不足」（total 为 None）的标的自成最后一组。
+    """
+    ranks: list[int] = []
+    start = 0
+    for index in range(len(items)):
+        if index > 0 and items[index]["total"] != items[start]["total"]:
+            start = index
+        ranks.append(start + 1)
+    sizes: dict[int, int] = {}
+    for rank in ranks:
+        sizes[rank] = sizes.get(rank, 0) + 1
+    return [(rank, sizes[rank]) for rank in ranks]
 
 
 def _coverage_text(scores: dict | None, missing: list[str] | None) -> str:
@@ -212,6 +234,42 @@ def _format_detail(name: str, value) -> str:
         return f"{label} {template.format(float(value))}"
     except (TypeError, ValueError):
         return label
+
+
+def _risk_text(
+    scores: dict, values: dict, sustainability: dict | None, high_phrase: str | None
+) -> str:
+    """风险列：可持续性警示（P1）优先，其后高位提示与零分档指标，最多 3 项。
+
+    可持续性警示是财报硬事实（盈利下滑/现金流为负/分红超现金流），比分数档位
+    更值得占用有限的展示空间；无任何内容时为 ``-``。
+    """
+    items = _sustainability_phrases(sustainability)
+    if high_phrase:
+        items.append(high_phrase)
+    items.extend(
+        _format_detail(name, values.get(name))
+        for name, tier in scores.items()
+        if tier == 0.0
+    )
+    return "、".join(items[:3]) if items else "-"
+
+
+def _sustainability_phrases(sustainability: dict | None) -> list[str]:
+    """分红可持续性警示：盈利下滑 / 经营现金流为负 / 分红超现金流。"""
+    if not sustainability:
+        return []
+    phrases = []
+    eps_growth = sustainability.get("eps_growth")
+    if eps_growth is not None and float(eps_growth) < 0:
+        phrases.append(f"盈利下滑 {abs(float(eps_growth)):.0f}%")
+    op_cash = sustainability.get("op_cash_per_share")
+    cash_cover = sustainability.get("cash_cover")
+    if op_cash is not None and float(op_cash) <= 0:
+        phrases.append("经营现金流为负")
+    elif cash_cover is not None and float(cash_cover) > 100:
+        phrases.append(f"分红超现金流 {float(cash_cover):.0f}%")
+    return phrases
 
 
 def _position_phrases(position) -> tuple[str | None, str | None]:

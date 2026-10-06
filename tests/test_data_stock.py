@@ -12,6 +12,7 @@ import pytest
 
 from src.data import (
     get_dividend_history,
+    get_financial_health,
     get_kline,
     get_stock_spot,
     reset_quote_source_state,
@@ -456,6 +457,65 @@ def test_failed_fallback_does_not_trip_the_breaker(monkeypatch):
     assert get_kline("600036", as_of=AS_OF) is None
     assert get_kline("000001", as_of=AS_OF) is None
     assert len(attempts) == 4  # 回退也失败 → 不熔断，每只都仍先试东财
+
+
+# ---------------------------------------------------------------------------
+# get_financial_health（分红可持续性：新浪财务分析指标）
+# ---------------------------------------------------------------------------
+
+
+def _financial_frame():
+    """stock_financial_analysis_indicator 原始列名的最小帧（按报告期升序，含季报）。"""
+    return pd.DataFrame(
+        {
+            "日期": ["2023-12-31", "2024-12-31", "2025-12-31", "2026-06-30"],
+            "摊薄每股收益(元)": [0.9, 1.1, 1.0, 0.5],
+            "每股经营性现金流(元)": [1.1, 1.0, 1.2, 0.6],
+            "净利润增长率(%)": [8.0, 5.0, -12.6, 3.0],
+            "股息发放率(%)": [35.0, 40.0, 118.0, 30.0],
+        }
+    )
+
+
+def test_financial_health_uses_latest_annual_row(monkeypatch):
+    calls = {}
+
+    def fake(symbol, start_year):
+        calls["symbol"] = symbol
+        calls["start_year"] = start_year
+        return _financial_frame()
+
+    monkeypatch.setattr(ak, "stock_financial_analysis_indicator", fake)
+
+    out = get_financial_health("600015")
+
+    assert out == {
+        "eps_growth": pytest.approx(-12.6),
+        "op_cash_per_share": pytest.approx(1.2),
+        "payout_stmt": pytest.approx(118.0),
+    }
+    assert calls["symbol"] == "600015"
+    assert int(calls["start_year"]) <= date.today().year - 3  # 只请求近几年的报告
+
+
+def test_financial_health_without_annual_rows_returns_none(monkeypatch):
+    quarterly_only = pd.DataFrame(
+        {"日期": ["2026-06-30"], "每股经营性现金流(元)": [0.6]}
+    )
+    monkeypatch.setattr(
+        ak, "stock_financial_analysis_indicator", lambda symbol, start_year: quarterly_only
+    )
+
+    assert get_financial_health("600015") is None
+
+
+def test_financial_health_failure_returns_none(monkeypatch):
+    def boom(symbol, start_year):
+        raise ConnectionError("网络超时")
+
+    monkeypatch.setattr(ak, "stock_financial_analysis_indicator", boom)
+
+    assert get_financial_health("600015") is None
 
 
 def test_reset_quote_source_state_retries_eastmoney(monkeypatch):

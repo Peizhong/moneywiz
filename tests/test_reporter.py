@@ -146,16 +146,16 @@ def _table_rows(report, header):
         # n=6, buy=5, avoid=5 的边界
         (1, 6, 5, 5, True, "买入"),
         (5, 6, 5, 5, True, "买入"),
-        (6, 6, 5, 5, True, "回避"),
+        (6, 6, 5, 5, True, "末位"),
         # n=3, buy=5：买入名额多于标的，全部买入
         (1, 3, 5, 5, True, "买入"),
         (2, 3, 5, 5, True, "买入"),
         (3, 3, 5, 5, True, "买入"),
-        # 中间档为观察；回避区边界 (total_count - avoid_bottom_n)
+        # 中间档为观察；末位区边界 (total_count - avoid_bottom_n)
         (5, 10, 2, 2, True, "观察"),
         (8, 10, 2, 2, True, "观察"),
-        (9, 10, 2, 2, True, "回避"),
-        (10, 10, 2, 2, True, "回避"),
+        (9, 10, 2, 2, True, "末位"),
+        (10, 10, 2, 2, True, "末位"),
     ],
 )
 def test_signal_for_rank_boundaries(
@@ -241,6 +241,32 @@ def test_render_report_sorts_none_last_and_ties_by_code():
     assert "300750" in rows[2]
 
 
+def test_ties_share_rank_and_boundary_signal():
+    # 6 只同分：同属并列第 1，买入名额不因代码排序把同分裂开
+    results = [
+        _result(f"60{i:04d}", f"股{i}", 96.7, scores={"dividend_yield": 1.0})
+        for i in range(1, 7)
+    ]
+    report = render_report(results, [], {"buy_top_n": 5, "avoid_bottom_n": 1}, 0.0)
+
+    rows = _table_rows(report, STOCK_HEADER)
+    assert all("并列6" in row for row in rows)
+    assert all("买入" in row for row in rows)
+
+
+def test_competition_rank_skips_after_tie_group():
+    results = [
+        _result("000001", "甲", 90.0, scores={"dividend_yield": 1.0}),
+        _result("000002", "乙", 90.0, scores={"dividend_yield": 1.0}),
+        _result("000003", "丙", 30.0, scores={"dividend_yield": 0.0}),
+    ]
+    report = render_report(results, [], {"buy_top_n": 5, "avoid_bottom_n": 5}, 0.0)
+
+    rows = _table_rows(report, STOCK_HEADER)
+    assert "1(并列2)" in rows[0] and "1(并列2)" in rows[1]
+    assert "3" in rows[2].split() and "并列" not in rows[2]
+
+
 def test_render_report_uses_output_cfg_thresholds():
     results = [
         _result("000001", "甲", 90.0, scores={"dividend_yield": 1.0}),
@@ -253,7 +279,8 @@ def test_render_report_uses_output_cfg_thresholds():
     rows = _table_rows(report, STOCK_HEADER)
     assert "买入" in rows[0]
     assert "观察" in rows[1]
-    assert "回避" in rows[2]
+    assert "末位" in rows[2]
+    assert "回避" not in report
 
 
 def test_render_report_none_scores_render_dashes():
@@ -326,6 +353,34 @@ MARKET = {
     "spread": 2.32,
     "index_pe_position": 14.0,
 }
+
+
+def test_sustainability_warnings_join_risk_column():
+    result = _result("600015", "华夏银行", 70.0, scores={"dividend_yield": 1.0})
+    result["sustainability"] = {
+        "eps_growth": -12.6,
+        "op_cash_per_share": 0.5,
+        "cash_cover": 200.4,
+    }
+
+    row = _table_rows(render_report([result], [], OUTPUT_CFG, 1.0), STOCK_HEADER)[0]
+
+    assert "盈利下滑 13%" in row
+    assert "分红超现金流 200%" in row
+
+
+def test_negative_operating_cash_flow_warning():
+    result = _result("600015", "华夏银行", 70.0, scores={"dividend_yield": 1.0})
+    result["sustainability"] = {
+        "eps_growth": 5.0,
+        "op_cash_per_share": -0.2,
+        "cash_cover": None,
+    }
+
+    row = _table_rows(render_report([result], [], OUTPUT_CFG, 1.0), STOCK_HEADER)[0]
+
+    assert "经营现金流为负" in row
+    assert "盈利下滑" not in row  # 增长为正不提示
 
 
 def test_market_header_rendered_before_tables():

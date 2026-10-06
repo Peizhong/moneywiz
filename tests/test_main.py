@@ -82,6 +82,7 @@ DATA_FUNCTIONS = (
     "get_index_pe_history",
     "get_index_dividend_yield",
     "get_10y_bond_yield",
+    "get_financial_health",
 )
 
 
@@ -195,6 +196,11 @@ def _happy_overrides(**extra):
         "get_index_pe_history": lambda symbol: INDEX_PE,
         "get_index_dividend_yield": lambda index_code="000922": 4.2,
         "get_10y_bond_yield": lambda: 1.8,
+        "get_financial_health": lambda code: {
+            "eps_growth": 6.0,
+            "op_cash_per_share": 2.0,
+            "payout_stmt": 40.0,
+        },
         **extra,
     }
 
@@ -277,6 +283,22 @@ def test_run_kline_failure_keeps_other_indicators_scoring(
     assert "14.7" in row
     assert "N/A" not in row and "数据不足" not in row
     assert "平安银行" in report and "红利ETF" in report  # 其余标的不受影响
+
+
+def test_run_surfaces_sustainability_warnings(monkeypatch, config_dir, tmp_path):
+    def health(code):
+        return {"eps_growth": -12.6, "op_cash_per_share": 0.5, "payout_stmt": 118.0}
+
+    _patch_data(monkeypatch, **_happy_overrides(get_financial_health=health))
+
+    report = main.run(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
+
+    row = _row_for(report, "平安银行")
+    assert "盈利下滑 13%" in row
+    # TTM 每股分红 1.0 ÷ 每股经营现金流 0.5 = 200%
+    assert "分红超现金流 200%" in row
+    other = _row_for(report, "红利ETF")
+    assert "盈利下滑" not in other  # 基金不参与个股财报检查
 
 
 def test_run_includes_market_header(monkeypatch, config_dir, tmp_path):

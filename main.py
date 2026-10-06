@@ -43,7 +43,7 @@ def _num(value):
     return value
 
 
-def _result(code, name, values, rules_section, tech, position=None):
+def _result(code, name, values, rules_section, tech, position=None, sustainability=None):
     """按 reporter 契约组装单只标的的 result dict。"""
     score = scorer.score_instrument(values, rules_section)
     return {
@@ -55,6 +55,7 @@ def _result(code, name, values, rules_section, tech, position=None):
         "missing": score["missing"],
         "tech": tech,
         "position": position,
+        "sustainability": sustainability,
     }
 
 
@@ -125,7 +126,30 @@ def _stock_result(
         rules_section,
         tech,
         position=_num(indicators.calc_price_position(kline)),
+        sustainability=_sustainability(stock.code, dividends, as_of),
     )
+
+
+def _sustainability(code, dividends, as_of):
+    """分红可持续性（仅标注，不参与打分）：盈利下滑 / 经营现金流为负 / 分红超现金流。
+
+    数据来自年报口径的 ``get_financial_health``；任一数据缺失只影响对应警示。
+    """
+    health = _fetch(
+        lambda: data.get_financial_health(code), f"get_financial_health({code})"
+    )
+    if health is None:
+        return None
+    op_cash = health.get("op_cash_per_share")
+    ttm_per_share = _num(indicators.calc_ttm_dividend_per_share(dividends, as_of))
+    cash_cover = None
+    if ttm_per_share is not None and op_cash is not None and op_cash > 0:
+        cash_cover = ttm_per_share / op_cash * 100.0
+    return {
+        "eps_growth": health.get("eps_growth"),
+        "op_cash_per_share": op_cash,
+        "cash_cover": cash_cover,
+    }
 
 
 def _fetch_fund_quotes(cfg_funds):
