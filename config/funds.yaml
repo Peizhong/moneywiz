@@ -1,0 +1,5 @@
+funds:
+  - code: "510880"
+    name: "红利ETF"
+    type: etf      # etf | lof | normal
+    index: "上证红利"

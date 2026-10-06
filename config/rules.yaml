@@ -1,0 +1,53 @@
+# 股票评分指标权重与阈值（权重总和 100）
+stocks:
+  indicators:
+    dividend_yield:
+      weight: 30
+      thresholds: { high: 4.0, mid: 2.0 }
+    dividend_years:
+      weight: 20
+      thresholds: { high: 5, mid: 3 }
+    payout_ratio:
+      weight: 10
+      thresholds: { min: 20, max: 70 }
+    pe_vs_industry:
+      weight: 15
+      thresholds: { discount: -30, premium: 30 }
+    pb_vs_industry:
+      weight: 10
+      thresholds: { discount: -30, premium: 30 }
+    ma60_position:
+      weight: 10
+      thresholds: { sweet_low: -5, sweet_high: 5, max_deviation: 20 }
+    momentum_5d:
+      weight: 5
+      thresholds: { oversold: -10, overbought: 10 }
+
+# 基金评分指标权重与阈值（权重总和 100）
+funds:
+  indicators:
+    discount_rate:
+      weight: 25
+      thresholds: { discount: -1, premium: 1 }
+    nav_trend_20d:
+      weight: 25
+      thresholds: { pullback: -10, rally: 5 }
+    index_pe_vs_history:
+      weight: 25
+      thresholds: { low: 30, high: 70 }
+    dividend_frequency:
+      weight: 15
+      thresholds: { high: 2, mid: 1 }
+    fund_size:
+      weight: 10
+      thresholds: { min: 1 }
+
+# 数据拉取参数
+data:
+  kline_days: 120
+  pe_cache_days: 7
+
+# 输出参数
+output:
+  buy_top_n: 5
+  avoid_bottom_n: 5
