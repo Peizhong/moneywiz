@@ -140,7 +140,7 @@ def test_kline_requests_qfq_over_two_times_window(monkeypatch):
             "adjust": "qfq",
         }
     ]
-    assert list(out.columns) == ["date", "close"]
+    assert list(out.columns) == ["date", "close", "volume"]
     assert out["close"].tolist() == [39.8]
 
 
@@ -158,7 +158,7 @@ def test_kline_takes_last_days_and_drops_nan_close(monkeypatch):
 
     out = get_kline("600036", days=3, as_of=AS_OF)
 
-    assert list(out.columns) == ["date", "close"]
+    assert list(out.columns) == ["date", "close", "volume"]
     assert out["date"].tolist() == list(pd.to_datetime(["2026-09-29", "2026-10-06"]))
     assert out["close"].tolist() == [39.3, 39.8]
     assert out["close"].notna().all()  # indicators 不应看到 NaN
@@ -182,7 +182,7 @@ def test_kline_empty_source_returns_empty_frame_with_columns(monkeypatch):
     out = get_kline("600036", as_of=AS_OF)
 
     assert out is not None and out.empty
-    assert list(out.columns) == ["date", "close"]
+    assert list(out.columns) == ["date", "close", "volume"]
 
 
 # ---------------------------------------------------------------------------
@@ -378,7 +378,7 @@ def test_kline_falls_back_to_tencent_qfq(monkeypatch, caplog):
     with caplog.at_level(logging.WARNING):
         out = get_kline("600036", days=120, as_of=AS_OF)
 
-    assert list(out.columns) == ["date", "close"]
+    assert list(out.columns) == ["date", "close", "volume"]
     assert out["close"].tolist() == pytest.approx([40.64, 40.51, 41.26])
     assert out["date"].is_monotonic_increasing
     assert calls[0]["params"]["param"] == "sh600036,day,,,120,qfq"
