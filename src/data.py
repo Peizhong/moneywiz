@@ -49,6 +49,7 @@ KLINE_COLUMNS = ("date", "close", "volume")
 DIVIDEND_COLUMNS = ("date", "dividend_per_share")
 PE_CACHE_FILENAME = "pe_cache.json"
 FINANCIAL_CACHE_FILENAME = "financial_cache.json"
+SINA_INDUSTRY_FILENAME = "sina_industry.json"
 
 FUND_QUOTE_COLUMNS = ("code", "name", "price", "iopv")
 FUND_NAV_COLUMNS = ("date", "close")
@@ -168,10 +169,13 @@ def _call(fn, *args, label=None, **kwargs):
 
 
 def _tencent_symbol(code: str) -> str | None:
-    """A 股代码 → 腾讯行情符号；6→sh、0/3→sz、4/8/9→bj，无法识别 → None。"""
-    if code.startswith("6"):
+    """代码 → 腾讯行情符号；5/6→sh、0/1/3→sz、4/8/9→bj，无法识别 → None。
+
+    ``5`` 覆盖沪市基金/ETF（如 510880），``1`` 覆盖深市基金/LOF（如 161725）。
+    """
+    if code.startswith(("5", "6")):
         return f"sh{code}"
-    if code.startswith(("0", "3")):
+    if code.startswith(("0", "1", "3")):
         return f"sz{code}"
     if code.startswith(("4", "8", "9")):
         return f"bj{code}"
@@ -238,6 +242,18 @@ def _fetch_stock_spot(codes) -> pd.DataFrame | None:
     return frame[frame["code"].isin(codes)].reset_index(drop=True)
 
 
+def _tencent_quote_parts(text: str) -> dict[str, list[str]]:
+    """腾讯 ``q=`` 报文 → ``{代码: 字段列表}``（跳过无效/无匹配行）。"""
+    quotes = {}
+    for line in text.strip().split(";"):
+        if '="' not in line:
+            continue
+        parts = line.split('="', 1)[1].rstrip('"').split("~")
+        if len(parts) >= 4 and parts[2]:
+            quotes[parts[2]] = parts
+    return quotes
+
+
 def _tencent_spot(codes: list[str]) -> pd.DataFrame | None:
     """腾讯批量行情 → canonical 行情帧；全部代码前缀无法识别 → 空帧（不请求）。"""
     symbols = [symbol for c in codes if (symbol := _tencent_symbol(c)) is not None]
@@ -250,22 +266,17 @@ def _tencent_spot(codes: list[str]) -> pd.DataFrame | None:
     )
     if text is None:
         return None
-    rows = []
-    for line in text.strip().split(";"):
-        if '="' not in line:
-            continue
-        parts = line.split('="', 1)[1].rstrip('"').split("~")
-        if len(parts) < 47 or not parts[2]:
-            continue
-        rows.append(
-            {
-                "code": parts[2],
-                "name": parts[1],
-                "price": _num_or_none(parts[3]),
-                "pe": _num_or_none(parts[39]),
-                "pb": _num_or_none(parts[46]),
-            }
-        )
+    rows = [
+        {
+            "code": code,
+            "name": parts[1],
+            "price": _num_or_none(parts[3]),
+            "pe": _num_or_none(parts[39]),
+            "pb": _num_or_none(parts[46]),
+        }
+        for code, parts in _tencent_quote_parts(text).items()
+        if len(parts) >= 47
+    ]
     if not rows:
         return pd.DataFrame(columns=list(SPOT_COLUMNS))
     return pd.DataFrame(rows, columns=list(SPOT_COLUMNS))
@@ -432,25 +443,27 @@ def get_industry_pe_pb(
     industry = _cached_industry(cache, code, cache_days)
     if industry is None:
         if not _eastmoney_quotes_available():
-            logger.info("东财行情已熔断，get_industry_pe_pb(%s) 按数据不足处理", code)
-            return None
+            logger.info("东财行情已熔断，get_industry_pe_pb(%s) 回退新浪行业", code)
+            return _sina_industry_pe_pb(code, cache_dir, cache_days)
         raw = _call(ak.stock_individual_info_em, symbol=code)
         if raw is None:
             _mark_eastmoney_quotes_down()  # 行情集群失败即熔断（30 分钟内不重复重试）
         industry = _industry_from_info(raw)
         if industry is None:
-            return None
+            logger.warning("get_industry_pe_pb(%s) 东财行业获取失败，回退新浪行业", code)
+            return _sina_industry_pe_pb(code, cache_dir, cache_days)
         cache["stocks"][code] = {"industry": industry, "updated_at": stamp}
 
     medians = _cached_medians(cache, industry, cache_days)
     if medians is None:
         if not _eastmoney_quotes_available():
-            logger.info("东财行情已熔断，get_industry_pe_pb(%s) 按数据不足处理", code)
-            return None
+            logger.info("东财行情已熔断，get_industry_pe_pb(%s) 回退新浪行业", code)
+            return _sina_industry_pe_pb(code, cache_dir, cache_days)
         cons = _call(ak.stock_board_industry_cons_em, symbol=industry)
         if cons is None:
             _mark_eastmoney_quotes_down()  # 行情集群失败即熔断（30 分钟内不重复重试）
-            return None
+            logger.warning("get_industry_pe_pb(%s) 东财行业中位数获取失败，回退新浪行业", code)
+            return _sina_industry_pe_pb(code, cache_dir, cache_days)
         medians = {
             "pe": _positive_median(cons, "市盈率-动态"),
             "pb": _positive_median(cons, "市净率"),
@@ -459,6 +472,87 @@ def get_industry_pe_pb(
 
     _save_cache(cache_path, cache)
     return {"industry": industry, **medians}
+
+
+def _sina_industry_pe_pb(code: str, cache_dir, cache_days: int) -> dict | None:
+    """新浪行业回退：按反查表取板块，返回该板块 PE/PB 中位数；无数据 → None。"""
+    tables = _sina_industry_tables(cache_dir, cache_days)
+    if tables is None:
+        return None
+    sector = tables["stocks"].get(code)
+    if not sector:
+        return None
+    medians = tables["medians"].get(sector)
+    if not isinstance(medians, dict):
+        return None
+    return {"industry": sector, "pe": medians.get("pe"), "pb": medians.get("pb")}
+
+
+def _sina_industry_tables(cache_dir, cache_days: int) -> dict | None:
+    """新浪行业反查表（缓存 cache_days 天）。
+
+    返回 ``{"stocks": {代码: 板块}, "medians": {板块: {"pe", "pb"}}}``。
+    首次构建需扫描全部行业板块（约 1-2 分钟，注意其成分股自带 ``per``/``pb``），
+    失败 → None（调用方按数据不足处理）。
+    """
+    cache_path = Path(cache_dir) / SINA_INDUSTRY_FILENAME
+    cached = _load_sina_industry(cache_path)
+    if cached is not None and _is_fresh(cached.get("updated_at"), cache_days):
+        return cached
+
+    logger.warning("首次构建新浪行业表（扫描全部行业板块，约 1-2 分钟）…")
+    sectors = _call(ak.stock_sector_spot, indicator="行业")
+    if (
+        sectors is None
+        or sectors.empty
+        or "label" not in sectors.columns
+        or "板块" not in sectors.columns
+    ):
+        return None
+
+    stocks: dict[str, str] = {}
+    medians: dict[str, dict] = {}
+    scanned = 0
+    for row in sectors.itertuples():
+        label, name = str(getattr(row, "label", "")), str(getattr(row, "板块", ""))
+        if not label or not name:
+            continue
+        detail = _call(ak.stock_sector_detail, sector=label)
+        if detail is None or detail.empty:
+            continue
+        scanned += 1
+        for detail_row in detail.itertuples():
+            stock_code = str(getattr(detail_row, "code", "") or "")
+            if stock_code:
+                stocks[stock_code] = name
+        medians[name] = {
+            "pe": _positive_median(detail, "per"),
+            "pb": _positive_median(detail, "pb"),
+        }
+    if scanned == 0:
+        return None
+
+    payload = {
+        "updated_at": datetime.now().isoformat(),
+        "stocks": stocks,
+        "medians": medians,
+    }
+    _save_cache(cache_path, payload)
+    logger.info("新浪行业表构建完成：%d 个板块、%d 只股票", scanned, len(stocks))
+    return payload
+
+
+def _load_sina_industry(path: Path) -> dict | None:
+    """读取新浪行业缓存；缺失、损坏或形状不符 → None（触发重建）。"""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(raw.get("stocks"), dict) or not isinstance(
+            raw.get("medians"), dict
+        ):
+            return None
+        return raw
+    except (OSError, ValueError, TypeError):
+        return None
 
 
 def _industry_from_info(raw: pd.DataFrame | None) -> str | None:
@@ -555,34 +649,40 @@ _FUND_SPOT_FUNCTIONS = {"etf": "fund_etf_spot_em", "lof": "fund_lof_spot_em"}
 _FUND_HIST_FUNCTIONS = {"etf": "fund_etf_hist_em", "lof": "fund_lof_hist_em"}
 
 
-def get_fund_quotes(fund_type: str) -> pd.DataFrame | None:
-    """ETF/LOF 实时行情，归一为 ``code, name, price, iopv``。
+def get_fund_quotes(fund_type: str, codes) -> pd.DataFrame | None:
+    """ETF/LOF 实时行情（东财主源 → 腾讯回退），归一为 ``code, name, price, iopv``。
 
-    结果按 ``market_cache_hours``（默认 24 小时）缓存。
+    只保留 ``codes``；腾讯回退路径无 IOPV（该列为 NaN），结果按 24 小时缓存。
     """
-    return _cached(f"fund_quotes:{fund_type}", lambda: _fetch_fund_quotes(fund_type))
+    codes = list(codes)
+    return _cached(
+        f"fund_quotes:{fund_type}:{','.join(sorted(codes))}",
+        lambda: _fetch_fund_quotes(fund_type, codes),
+    )
 
 
-def _fetch_fund_quotes(fund_type: str) -> pd.DataFrame | None:
-    """ETF/LOF 实时行情，归一为 ``code, name, price, iopv``；失败 → None。
+def _fetch_fund_quotes(fund_type: str, codes: list[str]) -> pd.DataFrame | None:
+    """ETF/LOF 实时行情（东财主源 → 腾讯回退），归一 ``code, name, price, iopv``。
 
     ``etf`` 源 ``fund_etf_spot_em``、``lof`` 源 ``fund_lof_spot_em``（上游无
     IOPV 列 → 该列全为 NaN）；``normal`` 开放式基金无行情表 → None。
+    东财不可用时回退腾讯（价格，IOPV 缺失）。
     """
     ak_name = _FUND_SPOT_FUNCTIONS.get(fund_type)
     if ak_name is None:
         return None
     if not _eastmoney_quotes_available():
-        logger.info("东财行情已熔断，get_fund_quotes(%s) 按数据不足处理", fund_type)
-        return None
+        logger.info("东财行情已熔断，get_fund_quotes(%s) 回退腾讯行情", fund_type)
+        return _tencent_fund_quotes(codes)
     raw = _call(getattr(ak, ak_name))
     if raw is None:
         _mark_eastmoney_quotes_down()  # 行情集群失败即熔断（30 分钟内不重复重试）
-        return None
+        logger.warning("get_fund_quotes(%s) 东财行情不可用，回退腾讯行情", fund_type)
+        return _tencent_fund_quotes(codes)
     if raw.empty:
         return pd.DataFrame(columns=list(FUND_QUOTE_COLUMNS))
 
-    return pd.DataFrame(
+    frame = pd.DataFrame(
         {
             "code": raw["代码"].astype(str),
             "name": raw["名称"].astype(str),
@@ -594,6 +694,35 @@ def _fetch_fund_quotes(fund_type: str) -> pd.DataFrame | None:
             ),
         }
     ).reset_index(drop=True)
+    return frame[frame["code"].isin(codes)].reset_index(drop=True)
+
+
+def _tencent_fund_quotes(codes: list[str]) -> pd.DataFrame | None:
+    """腾讯行情回退：ETF/LOF 价格（无 IOPV → 该列为 NaN）；失败 → None。"""
+    wanted = set(codes)
+    symbols = [symbol for c in codes if (symbol := _tencent_symbol(c)) is not None]
+    if not symbols:
+        return pd.DataFrame(columns=list(FUND_QUOTE_COLUMNS))
+    text = _call(
+        _http_text,
+        TENCENT_QUOTE_URL + ",".join(symbols),
+        label="tencent qt.gtimg.cn",
+    )
+    if text is None:
+        return None
+    rows = [
+        {
+            "code": code,
+            "name": parts[1],
+            "price": _num_or_none(parts[3]),
+            "iopv": None,
+        }
+        for code, parts in _tencent_quote_parts(text).items()
+        if code in wanted
+    ]
+    if not rows:
+        return pd.DataFrame(columns=list(FUND_QUOTE_COLUMNS))
+    return pd.DataFrame(rows, columns=list(FUND_QUOTE_COLUMNS))
 
 
 def get_fund_nav_history(

@@ -346,10 +346,10 @@ def test_spot_skips_codes_with_unknown_prefix(monkeypatch):
     monkeypatch.setattr(ak, "stock_zh_a_spot_em", _raise_connection_error)
     calls = _patch_http(monkeypatch, {"qt.gtimg.cn": QUOTES_TEXT.encode("gbk")})
 
-    out = get_stock_spot(["12345", "600036"])  # 前缀无法识别 → 不请求也不出现
+    out = get_stock_spot(["200001", "600036"])  # 2 开头（B 股）不在支持范围 → 不请求也不出现
 
     assert list(out["code"]) == ["600036"]
-    assert "12345" not in calls[0]["url"]
+    assert "200001" not in calls[0]["url"]
 
 
 def test_spot_all_codes_unknown_returns_empty_frame_without_request(monkeypatch):
@@ -357,7 +357,7 @@ def test_spot_all_codes_unknown_returns_empty_frame_without_request(monkeypatch)
     calls = []
     monkeypatch.setattr("src.data.requests.get", lambda *a, **k: calls.append(1))
 
-    out = get_stock_spot(["12345"])
+    out = get_stock_spot(["200001"])
 
     assert out is not None and out.empty
     assert list(out.columns) == ["code", "name", "price", "pe", "pb"]

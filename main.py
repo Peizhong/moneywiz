@@ -192,8 +192,9 @@ def _fetch_fund_quotes(cfg_funds):
     for fund_type in sorted({fund.type for fund in cfg_funds}):
         if fund_type == "normal":
             continue
+        codes = [fund.code for fund in cfg_funds if fund.type == fund_type]
         quotes[fund_type] = _fetch(
-            lambda t=fund_type: data.get_fund_quotes(t),
+            lambda t=fund_type, c=codes: data.get_fund_quotes(t, c),
             f"get_fund_quotes({fund_type})",
         )
     return quotes
@@ -249,15 +250,17 @@ def _fund_result(fund, quotes, as_of, kline_days, rules_section):
 
     if fund.type == "etf":
         nav = _num(row["iopv"]) if row is not None else None
-    elif fund.type == "lof":
+    else:
+        nav = None  # LOF 稍后用最新净值；场外基金不可评分
+
+    if fund.type in ("etf", "lof") and nav is None:
+        # LOF，或 ETF 无 IOPV（腾讯回退路径）→ 用最新单位净值做日频折溢价代理
         nav = _num(
             _fetch(
                 lambda: data.get_fund_latest_nav(fund.code),
                 f"get_fund_latest_nav({fund.code})",
             )
         )
-    else:
-        nav = None  # 场外基金无市价，折溢价率不可评分
 
     nav_history = _fetch(
         lambda: data.get_fund_nav_history(fund.code, fund.type, days=kline_days),

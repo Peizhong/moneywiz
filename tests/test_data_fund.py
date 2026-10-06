@@ -155,7 +155,7 @@ def test_etf_quotes_normalize_columns_and_missing_iopv(monkeypatch):
 
     monkeypatch.setattr(ak, "fund_etf_spot_em", fund_etf_spot_em)
 
-    out = get_fund_quotes("etf")
+    out = get_fund_quotes("etf", ["510880", "510300"])
 
     assert calls == [1]
     assert list(out.columns) == ["code", "name", "price", "iopv"]
@@ -170,7 +170,7 @@ def test_etf_quotes_normalize_columns_and_missing_iopv(monkeypatch):
 def test_lof_quotes_fill_absent_iopv_with_missing(monkeypatch):
     monkeypatch.setattr(ak, "fund_lof_spot_em", lambda: _lof_quote_frame())
 
-    out = get_fund_quotes("lof")
+    out = get_fund_quotes("lof", ["161725"])
 
     assert list(out.columns) == ["code", "name", "price", "iopv"]
     assert out["code"].tolist() == ["161725"]
@@ -188,14 +188,14 @@ def test_normal_quotes_has_no_source_and_returns_none(monkeypatch):
     monkeypatch.setattr(ak, "fund_etf_spot_em", fake)
     monkeypatch.setattr(ak, "fund_lof_spot_em", fake)
 
-    assert get_fund_quotes("normal") is None
+    assert get_fund_quotes("normal", ["000001"]) is None
     assert calls == []  # normal 无行情表，不应请求任何行情接口
 
 
 def test_quotes_empty_source_returns_empty_frame_with_columns(monkeypatch):
     monkeypatch.setattr(ak, "fund_etf_spot_em", lambda: pd.DataFrame())
 
-    out = get_fund_quotes("etf")
+    out = get_fund_quotes("etf", ["510880"])
 
     assert out is not None and out.empty
     assert list(out.columns) == ["code", "name", "price", "iopv"]
@@ -488,8 +488,8 @@ def test_index_pe_history_empty_source_returns_empty_frame_with_columns(monkeypa
 @pytest.mark.parametrize(
     ("ak_name", "fetch"),
     [
-        ("fund_etf_spot_em", lambda: get_fund_quotes("etf")),
-        ("fund_lof_spot_em", lambda: get_fund_quotes("lof")),
+        ("fund_etf_spot_em", lambda: get_fund_quotes("etf", [ETF_CODE])),
+        ("fund_lof_spot_em", lambda: get_fund_quotes("lof", [LOF_CODE])),
         ("fund_etf_hist_em", lambda: get_fund_nav_history(ETF_CODE, "etf")),
         ("fund_lof_hist_em", lambda: get_fund_nav_history(LOF_CODE, "lof")),
         ("fund_open_fund_info_em", lambda: get_fund_nav_history(NORMAL_CODE, "normal")),
@@ -584,5 +584,49 @@ def test_etf_fallback_trips_breaker_for_fund_quotes(monkeypatch):
     out = get_fund_nav_history(ETF_CODE, "etf")  # 触发熔断
 
     assert out is not None
-    assert get_fund_quotes("etf") is None
+    assert get_fund_quotes("etf", [ETF_CODE]) is None
     assert spot_calls == []  # 被跳过，未发起请求
+
+
+# ---------------------------------------------------------------------------
+# B 计划：腾讯基金行情回退
+# ---------------------------------------------------------------------------
+
+
+def _fake_tencent_text():
+    return (
+        'v_sh510880="1~红利ETF华泰柏瑞~510880~3.368~3.325~3.325~1532932~945697~587235'
+        '~3.368~6~~20260930161447~0.043~1.29~3.380~3.300~~";\n'
+        'v_sz161725="51~白酒基金LOF~161725~0.529~0.530~0.528~100~50~50'
+        '~0.529~6~~20260930150000~-0.001~-0.19~0.535~0.525~~";\n'
+    )
+
+
+def test_fund_quotes_fall_back_to_tencent_when_eastmoney_fails(monkeypatch):
+    def failing(**kwargs):
+        raise ConnectionError("东财不可用")
+
+    monkeypatch.setattr(ak, "fund_etf_spot_em", failing)
+    monkeypatch.setattr(
+        "src.data.requests.get",
+        lambda *a, **k: type(
+            "R", (), {"content": _fake_tencent_text().encode("gbk"),
+                      "raise_for_status": lambda self: None}
+        )(),
+    )
+
+    out = get_fund_quotes("etf", ["510880"])
+
+    assert list(out.columns) == ["code", "name", "price", "iopv"]
+    assert out["code"].tolist() == ["510880"]
+    assert out["price"].tolist() == pytest.approx([3.368])
+    assert out["iopv"].isna().all()  # 回退路径无 IOPV → 由最新净值代理折溢价
+
+
+def test_tencent_symbol_covers_etf_and_lof_prefixes():
+    from src.data import _tencent_symbol
+
+    assert _tencent_symbol("510880") == "sh510880"  # 沪市 ETF
+    assert _tencent_symbol("161725") == "sz161725"  # 深市 LOF
+    assert _tencent_symbol("159915") == "sz159915"  # 深市 ETF
+    assert _tencent_symbol("200001") is None  # B 股不在支持范围

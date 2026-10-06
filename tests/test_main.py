@@ -204,7 +204,7 @@ def _happy_overrides(**extra):
             STOCK_B: DIVIDENDS_B,
         }[code],
         "get_industry_pe_pb": lambda code, cache_dir, cache_days=7: INDUSTRY[code],
-        "get_fund_quotes": lambda fund_type: FUND_QUOTES,
+        "get_fund_quotes": lambda fund_type, codes: FUND_QUOTES,
         "get_fund_nav_history": lambda code, fund_type, days=120: FUND_NAV,
         "get_fund_dividend_history": lambda code: FUND_DIVIDENDS,
         "get_fund_overview": lambda code: {
@@ -531,8 +531,8 @@ def test_run_passes_data_rules_and_as_of_through(monkeypatch, config_dir, tmp_pa
         calls["nav"].append((code, fund_type, days))
         return None
 
-    def get_fund_quotes(fund_type):
-        calls["quotes"].append(fund_type)
+    def get_fund_quotes(fund_type, codes):
+        calls["quotes"].append((fund_type, tuple(codes)))
         return FUND_QUOTES
 
     def resolve_index_symbol(configured, tracker):
@@ -558,7 +558,7 @@ def test_run_passes_data_rules_and_as_of_through(monkeypatch, config_dir, tmp_pa
         (STOCK_B, tmp_path, 7),
     ]
     assert calls["nav"] == [(FUND_CODE, "etf", 120)]
-    assert calls["quotes"] == ["etf"]  # 每种基金类型只拉一次行情
+    assert calls["quotes"] == [("etf", (FUND_CODE,))]  # 每种基金类型只拉一次行情
     assert calls["symbol"] == [("上证红利", "上证红利指数")]
 
 
@@ -620,3 +620,21 @@ def test_main_reports_config_error_and_returns_one(monkeypatch, capsys):
 
     captured = capsys.readouterr()
     assert "stocks.yaml: 配置文件不存在" in captured.err
+
+
+def test_run_etf_discount_falls_back_to_latest_nav(monkeypatch, config_dir, tmp_path):
+    """腾讯回退路径无 IOPV：折溢价用最新单位净值代理（日频口径）。"""
+    quotes_without_iopv = pd.DataFrame(
+        {"code": [FUND_CODE], "name": ["红利ETF"], "price": [1.02], "iopv": [None]}
+    )
+    _patch_data(
+        monkeypatch,
+        **_happy_overrides(
+            get_fund_quotes=lambda fund_type, codes: quotes_without_iopv,
+            get_fund_latest_nav=lambda code: 1.0,
+        ),
+    )
+
+    report = main.run(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
+
+    assert "折溢价 +2.00%" in _row_for(report, "红利ETF")

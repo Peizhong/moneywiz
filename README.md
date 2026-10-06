@@ -166,12 +166,15 @@ docker run --rm moneywiz pytest    # 容器内跑测试
 
 ## 已知限制
 
-- **数据源回退（东财 → 腾讯）**：`push2*.eastmoney.com` 会按出口 IP 拒绝海外请求
-  （实测海外直连时 TLS 握手成功即被断开），个股行情与 K 线在东财失败时自动回退腾讯
-  （`qt.gtimg.cn` 批量行情、`web.ifzq.gtimg.cn` 前复权日线），基金历史回退到
-  `fund_open_fund_info_em` 的单位净值走势。回退会记录「回退…」warning；基金净值趋势
-  回退后基于净值而非市价（语义不变）。东财独有、无等价公开源的两项在海外网络下仍为
-  「数据不足」：行业 PE/PB 对比、ETF IOPV 折溢价。
+- **数据源回退（东财 → 腾讯/新浪）**：`push2*.eastmoney.com` 可能按出口 IP 拒绝
+  请求（海外实测 TLS 握手成功即被断开）。东财失败时自动回退：
+  - 个股行情与 K 线 → 腾讯（`qt.gtimg.cn` 批量行情、`web.ifzq.gtimg.cn` 前复权日线）
+  - ETF/LOF 行情 → 腾讯（价格；无 IOPV，折溢价改用最新单位净值做**日频代理口径**）
+  - 行业 PE/PB → **新浪行业板块**（成分股自带 PE/PB，首次扫描全部行业约 1-2 分钟，
+    缓存 `cache/sina_industry.json` 7 天）
+  - 基金历史 → `fund_open_fund_info_em` 的单位净值走势
+  回退会记录「回退…」warning；至此东财不是任何指标的必需源（分数完整度只受净值
+  日频口径等轻微精度影响）。
 - **东财行情路径未在本环境真实联调**：本开发环境出口 IP 被 `push2*.eastmoney.com`
   拒绝，`stock_zh_a_spot_em`、`stock_zh_a_hist`、`fund_etf_spot_em`/`fund_lof_spot_em`、
   行业板块接口的字段映射依据 akshare 1.19.1 源码核对；腾讯回退路径已实测可用。

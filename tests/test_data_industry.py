@@ -70,6 +70,14 @@ def _patch_ak(
     fake_cons.__name__ = "stock_board_industry_cons_em"
     monkeypatch.setattr(ak, "stock_individual_info_em", fake_info)
     monkeypatch.setattr(ak, "stock_board_industry_cons_em", fake_cons)
+
+    # 新浪行业回退默认不可用：失败路径不得触发真实的 84 行业扫描；
+    # 专门测试 B 计划时再自行覆盖 stock_sector_spot / stock_sector_detail
+    def fake_sector_spot(**kwargs):
+        raise ConnectionError("新浪行业未打桩（测试防真实网络）")
+
+    fake_sector_spot.__name__ = "stock_sector_spot"
+    monkeypatch.setattr(ak, "stock_sector_spot", fake_sector_spot)
     return calls
 
 
@@ -332,3 +340,85 @@ def test_missing_industry_returns_none(monkeypatch, tmp_path, info_frame):
     assert len(calls["info"]) == 1
     assert calls["cons"] == []  # 行业未知，不再请求成分股
     assert not (tmp_path / "pe_cache.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# B 计划：新浪行业回退（东财不可用时）
+# ---------------------------------------------------------------------------
+
+
+def _sina_sectors_frame():
+    return pd.DataFrame(
+        {
+            "label": ["hangye_ZA01", "hangye_ZC27"],
+            "板块": ["农业", "医药制造业"],
+            "公司家数": [15, 100],
+        }
+    )
+
+
+def _sina_detail_frame(entries):
+    """sina stock_sector_detail 原始帧（只保留被测列）：entries 为 (code, per, pb)。"""
+    return pd.DataFrame(
+        {
+            "code": [code for code, _, _ in entries],
+            "name": [f"股票{code}" for code, _, _ in entries],
+            "per": [per for _, per, _ in entries],
+            "pb": [pb for _, _, pb in entries],
+        }
+    )
+
+
+def _patch_sina(monkeypatch):
+    calls = {"sectors": 0, "detail": []}
+
+    def fake_sectors(indicator):
+        calls["sectors"] += 1
+        return _sina_sectors_frame()
+
+    def fake_detail(sector):
+        calls["detail"].append(sector)
+        return {
+            "hangye_ZA01": _sina_detail_frame(
+                [("600108", 30.0, 1.5), ("600109", 10.0, 0.5), ("600110", -5.0, None)]
+            ),
+            "hangye_ZC27": _sina_detail_frame([("000001", 5.0, 0.6)]),
+        }[sector]
+
+    monkeypatch.setattr(ak, "stock_sector_spot", fake_sectors)
+    monkeypatch.setattr(ak, "stock_sector_detail", fake_detail)
+    return calls
+
+
+def test_sina_fallback_builds_table_and_returns_medians(monkeypatch, tmp_path):
+    _patch_ak(monkeypatch, info_exc=ConnectionError("东财不可用"))
+    calls = _patch_sina(monkeypatch)
+
+    out = get_industry_pe_pb("600108", tmp_path)
+
+    # 农业：PE 中位数 median(30, 10)（-5 被剔除）= 20；PB median(1.5, 0.5) = 1.0
+    assert out == {"industry": "农业", "pe": 20.0, "pb": 1.0}
+    assert calls["sectors"] == 1 and len(calls["detail"]) == 2  # 84 行业扫描的缩影
+    assert (tmp_path / "sina_industry.json").exists()
+
+
+def test_sina_table_is_cached_across_calls(monkeypatch, tmp_path):
+    _patch_ak(monkeypatch, info_exc=ConnectionError("东财不可用"))
+    calls = _patch_sina(monkeypatch)
+    get_industry_pe_pb("600108", tmp_path)  # 首次构建
+
+    def sector_boom(**kwargs):
+        raise AssertionError("缓存命中后不应再扫描行业板块")
+
+    monkeypatch.setattr(ak, "stock_sector_spot", sector_boom)
+    out = get_industry_pe_pb("000001", tmp_path)
+
+    assert out == {"industry": "医药制造业", "pe": 5.0, "pb": 0.6}
+    assert calls["sectors"] == 1  # 仍然只扫过一次
+
+
+def test_sina_fallback_unavailable_returns_none(monkeypatch, tmp_path):
+    _patch_ak(monkeypatch, info_exc=ConnectionError("东财不可用"))
+    # _patch_ak 已把 stock_sector_spot 打桩为失败 → 新浪也不可用
+
+    assert get_industry_pe_pb("600108", tmp_path) is None
