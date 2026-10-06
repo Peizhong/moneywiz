@@ -10,6 +10,7 @@ import math
 import re
 from datetime import date
 
+import numpy as np
 import pandas as pd
 
 
@@ -73,6 +74,57 @@ def calc_ttm_dividend_per_share(
     cutoff = pd.Timestamp(as_of) - pd.Timedelta(days=window_days)
     in_window = dividend_data.loc[dividend_data["date"] > cutoff, "dividend_per_share"]
     return float(in_window.sum())
+
+
+def calc_dividend_yield_percentile(
+    dividend_data: pd.DataFrame | None,
+    kline_raw: pd.DataFrame | None,
+    min_days: int = 250,
+    window_days: int = 365,
+) -> float | None:
+    """当前 TTM 股息率在自身历史序列中的分位（0-100）。
+
+    逐日重算 ``TTM 每股分红 ÷ 当日收盘 × 100``（与 ``calc_dividend_yield``
+    同一 TTM 窗口），分位 = 序列中 ≤ 当前值的占比。用于区分「股息率高」是
+    绝对水平还是相对自身历史：4.6% 可能是该股近年高位（相对便宜），也可能
+    是低位（为增长支付了高价）。
+
+    要求 ``kline_raw`` 为**不复权**价格帧（前复权价已扣除后来的分红，会把
+    历史股息率系统性算低）。数据不足（None、空帧、K 线不足 ``min_days`` 根）
+    或窗口内完全没有分红（TTM 恒为 0，分位无意义）→ None。
+
+    已知近似：分红帧只含现金派息，送股/转增未计入，除送转日附近的历史股息率
+    会有短暂偏差（目标池近年少见）。
+    """
+    if dividend_data is None or kline_raw is None or kline_raw.empty:
+        return None
+    frame = kline_raw.dropna(subset=["close"])
+    if len(frame) < min_days:
+        return None
+    div = dividend_data.dropna(subset=["date", "dividend_per_share"]).sort_values(
+        "date"
+    )
+    if div.empty:
+        return None
+
+    days = frame["date"].to_numpy(dtype="datetime64[D]")
+    div_days = div["date"].to_numpy(dtype="datetime64[D]")
+    cumulative = np.concatenate(
+        ([0.0], np.cumsum(div["dividend_per_share"].to_numpy(dtype=float)))
+    )
+    # TTM 窗口 (day - 365, day]（与 calc_ttm_dividend_per_share 同为开区间下界）
+    ttm = cumulative[
+        np.searchsorted(div_days, days, side="right")
+    ] - cumulative[
+        np.searchsorted(
+            div_days, days - np.timedelta64(window_days, "D"), side="right"
+        )
+    ]
+    if not ttm.any():
+        return None
+    yields = ttm / frame["close"].to_numpy(dtype=float) * 100.0
+    current = yields[-1]
+    return float((yields <= current).mean() * 100.0)
 
 
 def calc_dividend_years(dividend_data: pd.DataFrame | None, as_of: date) -> int | None:

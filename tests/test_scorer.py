@@ -16,6 +16,7 @@ from src.scorer import (
 
 # 与 config/rules.yaml 一致的档位阈值
 YIELD_TH = {"high": 4.0, "mid": 2.0}
+YIELD_PCT_TH = {"high": 70, "mid": 40}
 YEARS_TH = {"high": 5, "mid": 3}
 PAYOUT_TH = {"min": 20, "max": 70}
 PE_INDUSTRY_TH = {"discount": -30, "premium": 30}
@@ -74,6 +75,10 @@ FUND_SIZE_TH = {"min": 1}
         ("momentum_5d", -15, MOMENTUM_TH, 1.0),
         ("momentum_5d", 0, MOMENTUM_TH, 0.5),
         ("momentum_5d", 15, MOMENTUM_TH, 0.0),
+        # dividend_yield_percentile {high: 70, mid: 40}
+        ("dividend_yield_percentile", 85, YIELD_PCT_TH, 1.0),
+        ("dividend_yield_percentile", 50, YIELD_PCT_TH, 0.5),
+        ("dividend_yield_percentile", 20, YIELD_PCT_TH, 0.0),
     ],
 )
 def test_normalize_tier_boundaries(indicator, value, thresholds, expected):

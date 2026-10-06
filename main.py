@@ -120,6 +120,10 @@ def _stock_result(
         lambda: data.get_kline(stock.code, days=kline_days, as_of=as_of),
         f"get_kline({stock.code})",
     )
+    raw_kline = _fetch(
+        lambda: data.get_kline_raw(stock.code),
+        f"get_kline_raw({stock.code})",
+    )
     industry = _fetch(
         lambda: data.get_industry_pe_pb(stock.code, cache_dir, pe_cache_days),
         f"get_industry_pe_pb({stock.code})",
@@ -133,6 +137,9 @@ def _stock_result(
 
     values = {
         "dividend_yield": dividend_yield,
+        "dividend_yield_percentile": _num(
+            indicators.calc_dividend_yield_percentile(dividends, raw_kline)
+        ),
         "dividend_years": _num(indicators.calc_dividend_years(dividends, as_of)),
         "dividend_trend": _num(indicators.calc_dividend_trend(dividends, as_of)),
         "payout_ratio": _num(indicators.calc_payout_ratio(dividend_yield, pe)),

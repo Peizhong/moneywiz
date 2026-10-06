@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-红利投资筛选工具：读取自选股票/基金与多个红利指数成分股，经 akshare/腾讯/新浪等数据源拉取行情、分红、年报数据，按 13 个指标（股票 8 + 基金 5）加权打分（总分另受分红可持续性红标扣分），终端输出排序信号表。代码与文档以中文为主（docstrings、日志、README、提交信息）。
+红利投资筛选工具：读取自选股票/基金与多个红利指数成分股，经 akshare/腾讯/新浪等数据源拉取行情、分红、年报数据，按 14 个指标（股票 9 + 基金 5）加权打分（总分另受分红可持续性红标扣分），终端输出排序信号表。代码与文档以中文为主（docstrings、日志、README、提交信息）。
 
 设计与实现的原始文档在 `docs/superpowers/specs/` 与 `docs/superpowers/plans/`（含“关键口径决策”一节——改动打分/口径前先读它）。
 

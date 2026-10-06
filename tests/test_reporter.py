@@ -491,6 +491,19 @@ def test_sustainability_period_label_mapping():
     assert phrase("not-a-date") == "盈利下滑 5%"
 
 
+def test_dividend_yield_percentile_highlight_and_risk_text():
+    good = _result("600100", "甲", 90.0, scores={"dividend_yield_percentile": 1.0})
+    good["values"] = {"dividend_yield_percentile": 92.0}
+    bad = _result("600101", "乙", 40.0, scores={"dividend_yield_percentile": 0.0})
+    bad["values"] = {"dividend_yield_percentile": 12.0}
+
+    report = render_report([good, bad], [], OUTPUT_CFG, 0.0)
+
+    rows = _table_rows(report, STOCK_HEADER)
+    assert "股息率分位 92%" in rows[0]  # 满分档 → 亮点
+    assert "股息率分位 12%" in rows[1]  # 零分档 → 风险
+
+
 def test_dividend_trend_detail_format():
     from src.reporter import _detail_text
 

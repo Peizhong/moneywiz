@@ -12,6 +12,7 @@ from src.indicators import (
     calc_dividend_trend,
     calc_dividend_years,
     calc_dividend_yield,
+    calc_dividend_yield_percentile,
     calc_payout_ratio,
     calc_pb_vs_industry,
     calc_pe_vs_industry,
@@ -179,3 +180,65 @@ def test_dividend_trend_rising_and_edges():
     # 完全无分红或获取失败 → 不可评分
     assert calc_dividend_trend(_dividend_frame([]), AS_OF) is None
     assert calc_dividend_trend(None, AS_OF) is None
+
+
+# ---------------------------------------------------------------------------
+# calc_dividend_yield_percentile（股息率历史分位）
+# ---------------------------------------------------------------------------
+
+
+def _kline(days, closes):
+    """规范原始 K 线帧（不复权口径）：date / close。"""
+    return pd.DataFrame({"date": pd.to_datetime(days), "close": closes})
+
+
+def test_yield_percentile_100_when_price_at_window_low():
+    # 一笔分红在窗口起点、价格单调下行 → 当前股息率是窗口内最高 → 分位 100
+    dates = pd.bdate_range("2026-01-05", periods=260)
+    kline = _kline(dates, [20.0 - index * 0.01 for index in range(260)])
+    dividends = _dividend_frame([("2026-01-05", 1.0)])
+
+    assert calc_dividend_yield_percentile(dividends, kline) == pytest.approx(100.0)
+
+
+def test_yield_percentile_near_zero_when_price_at_window_high():
+    dates = pd.bdate_range("2026-01-05", periods=260)
+    kline = _kline(dates, [10.0 + index * 0.01 for index in range(260)])
+    dividends = _dividend_frame([("2026-01-05", 1.0)])
+
+    # 价格严格上行 → 只有最后一天自身 ≤ 当前值
+    assert calc_dividend_yield_percentile(dividends, kline) == pytest.approx(
+        100.0 / 260
+    )
+
+
+def test_yield_percentile_excludes_dividend_after_365_days():
+    dividends = _dividend_frame([("2026-01-05", 1.0)])
+    inside = _kline(["2026-01-05", "2027-01-04"], [10.0, 10.0])  # 第 364 天仍计入
+    outside = _kline(["2026-01-05", "2027-01-05"], [10.0, 10.0])  # 第 365 天出窗
+
+    assert calc_dividend_yield_percentile(
+        dividends, inside, min_days=2
+    ) == pytest.approx(100.0)
+    # 当前 TTM=0 → 序列 [10%, 0%]，当前值 0 的占比 = 1/2
+    assert calc_dividend_yield_percentile(
+        dividends, outside, min_days=2
+    ) == pytest.approx(50.0)
+
+
+def test_yield_percentile_none_when_no_dividend_in_window():
+    kline = _kline(["2026-01-05", "2026-01-06"], [10.0, 10.0])
+    stale = _dividend_frame([("2023-01-01", 1.0)])  # 远早于窗口
+
+    assert calc_dividend_yield_percentile(stale, kline, min_days=2) is None
+    assert calc_dividend_yield_percentile(None, kline, min_days=2) is None
+    assert calc_dividend_yield_percentile(_dividend_frame([]), kline, min_days=2) is None
+
+
+def test_yield_percentile_none_when_kline_too_short():
+    kline = _kline(["2026-01-05", "2026-01-06"], [10.0, 10.0])
+    dividends = _dividend_frame([("2026-01-05", 1.0)])
+
+    # 默认最少 250 根（约 1 年），不足 → 不可评分
+    assert calc_dividend_yield_percentile(dividends, kline) is None
+    assert calc_dividend_yield_percentile(dividends, None, min_days=2) is None

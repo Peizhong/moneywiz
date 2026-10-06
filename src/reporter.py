@@ -16,6 +16,7 @@ from tabulate import tabulate
 
 INDICATOR_LABELS: dict[str, str] = {
     "dividend_yield": "股息率",
+    "dividend_yield_percentile": "股息率分位",
     "dividend_years": "连续分红",
     "dividend_trend": "分红趋势",
     "payout_ratio": "派息率",
@@ -33,6 +34,7 @@ INDICATOR_LABELS: dict[str, str] = {
 # 亮点/风险里的数值格式（指标单位各不相同；格式化失败时仅显示指标名）
 INDICATOR_VALUE_FORMATS: dict[str, str] = {
     "dividend_yield": "{:.1f}%",
+    "dividend_yield_percentile": "{:.0f}%",
     "dividend_years": "{:.0f}年",
     "dividend_trend": "{:+.0f}%",
     "payout_ratio": "{:.0f}%",

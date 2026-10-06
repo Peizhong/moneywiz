@@ -314,6 +314,18 @@ def get_kline(
     return _cached(key, lambda: _fetch_kline(code, days, as_of))
 
 
+def get_kline_raw(code: str, days: int = 790) -> pd.DataFrame | None:
+    """单只日 K 线（**不复权**，腾讯源），归一为 ``date, close, volume``。
+
+    用于股息率历史分位：历史股息率 = 当期 TTM 分红 ÷ 当日**不复权**价格——
+    前复权价已扣除后来的分红，会把历史股息率系统性算低。
+    结果按 ``market_cache_hours`` 缓存；失败 → None。
+    """
+    return _cached(
+        f"kline_raw:{code}:{days}", lambda: _tencent_kline(code, days, adjust=None)
+    )
+
+
 def _fetch_kline(
     code: str, days: int = 120, as_of: date | None = None
 ) -> pd.DataFrame | None:
@@ -368,26 +380,31 @@ def _fetch_kline(
     )
 
 
-def _tencent_kline(code: str, days: int) -> pd.DataFrame | None:
-    """腾讯前复权日线 → canonical K 线帧；取末尾 days 根。
+def _tencent_kline(
+    code: str, days: int, adjust: str | None = "qfq"
+) -> pd.DataFrame | None:
+    """腾讯日线 → canonical K 线帧；取末尾 days 根。
 
+    ``adjust="qfq"`` 前复权（报文键 ``qfqday``）；``adjust=None`` 不复权（键 ``day``）。
     腾讯接口按条数取数（不接日期区间），故回退路径忽略 ``as_of``。
     """
     symbol = _tencent_symbol(code)
     if symbol is None:
         return None
+    fq = "qfq" if adjust == "qfq" else ""
+    key = "qfqday" if adjust == "qfq" else "day"
     text = _call(
         _http_text,
         TENCENT_KLINE_URL,
-        params={"param": f"{symbol},day,,,{days},qfq"},
+        params={"param": f"{symbol},day,,,{days},{fq}"},
         encoding="utf-8",
-        label="tencent fqkline",
+        label="tencent fqkline" if adjust == "qfq" else "tencent kline",
     )
     if text is None:
         return None
     try:
         payload = json.loads(text)
-        rows = payload["data"][symbol].get("qfqday") or []
+        rows = payload["data"][symbol].get(key) or []
     except (ValueError, KeyError, TypeError):
         logger.warning("腾讯 K 线解析失败：%s", code)
         return None

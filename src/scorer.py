@@ -68,6 +68,7 @@ def _at_least_min(value: float, thresholds: dict) -> float:
 
 _TIERS: dict[str, Tier] = {
     "dividend_yield": _higher_better,
+    "dividend_yield_percentile": _higher_better,  # 当前股息率相对自身历史的分位
     "dividend_years": _higher_better,
     "dividend_frequency": _higher_better,
     "dividend_trend": _higher_better,  # 阈值 {high: 0, mid: -30}：分红下降越大分越低

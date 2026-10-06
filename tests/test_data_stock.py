@@ -17,6 +17,7 @@ from src.data import (
     get_dividend_history,
     get_financial_health,
     get_kline,
+    get_kline_raw,
     get_stock_spot,
     reset_quote_source_state,
 )
@@ -280,6 +281,9 @@ QUOTES_TEXT = 'v_sh600036="1~招商银行~600036~41.26~40.51~40.59~699871~408796
 # 同日真实抓取的腾讯前复权日线（qfqday 行序：日期, 开, 收, 高, 低, 量）
 KLINE_JSON = '{"code":0,"msg":"","data":{"sh600036":{"qfqday":[["2026-09-28","40.670","40.640","41.080","40.380","543918.000"],["2026-09-29","40.490","40.510","40.780","40.220","449346.000"],["2026-09-30","40.590","41.260","41.380","40.520","699871.000"]],"prec":"40.690","version":"18"}}}'
 
+# 同日腾讯不复权日线（键为 day；行序同 qfqday，收盘价与复权口径不同）
+RAW_KLINE_JSON = '{"code":0,"msg":"","data":{"sh600036":{"day":[["2026-09-28","40.980","40.950","41.380","40.690","543918.000"],["2026-09-29","40.800","40.820","41.090","40.530","449346.000"],["2026-09-30","40.900","41.570","41.690","40.830","699871.000"]]}}}'
+
 
 class _FakeResponse:
     def __init__(self, content: bytes, status: int = 200):
@@ -479,6 +483,34 @@ def test_expired_ttl_refetches(monkeypatch, tmp_path):
     get_kline("600036", as_of=AS_OF)
 
     assert len(calls) == 2
+
+
+def test_get_kline_raw_uses_tencent_without_adjust(monkeypatch):
+    calls = _patch_http(monkeypatch, {"fqkline": RAW_KLINE_JSON.encode("utf-8")})
+
+    frame = get_kline_raw("600036", days=790)
+
+    assert list(frame["close"]) == pytest.approx([40.95, 40.82, 41.57])
+    param = calls[0]["params"]["param"]
+    assert param.startswith("sh600036,day,,,790")
+    assert "qfq" not in param  # 不复权口径
+
+
+def test_get_kline_raw_is_cached(monkeypatch, tmp_path):
+    calls = _patch_http(monkeypatch, {"fqkline": RAW_KLINE_JSON.encode("utf-8")})
+    data.configure_cache(tmp_path, ttl_hours=24)
+
+    first = get_kline_raw("600036", days=790)
+    second = get_kline_raw("600036", days=790)
+
+    assert first is not None and second is not None
+    assert len(calls) == 1  # 第二次命中缓存
+
+
+def test_get_kline_raw_failure_returns_none(monkeypatch):
+    monkeypatch.setattr("src.data.requests.get", _raise_connection_error)
+
+    assert get_kline_raw("600036", days=790) is None
 
 
 # ---------------------------------------------------------------------------

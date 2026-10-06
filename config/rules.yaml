@@ -2,8 +2,11 @@
 stocks:
   indicators:
     dividend_yield:
-      weight: 25
+      weight: 15
       thresholds: { high: 4.0, mid: 2.0 }
+    dividend_yield_percentile:
+      weight: 10
+      thresholds: { high: 70, mid: 40 }   # 当前股息率在自身近 3 年序列中的分位（%）
     dividend_years:
       weight: 15
       thresholds: { high: 5, mid: 3 }

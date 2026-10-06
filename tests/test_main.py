@@ -71,6 +71,7 @@ RULES_CONFIG = {
 DATA_FUNCTIONS = (
     "get_stock_spot",
     "get_kline",
+    "get_kline_raw",
     "get_dividend_history",
     "get_industry_pe_pb",
     "get_fund_quotes",
@@ -145,6 +146,14 @@ SPOT = pd.DataFrame(
 )
 KLINE_A = _kline([9.0] * 60 + [10.0] * 10)
 KLINE_B = _kline([20.0] * 70)
+# 不复权长窗口：价格一路下行 → 当前 TTM 股息率（DIVIDENDS_A 每年 6-10 派 1 元）
+# 是窗口内最高 → 股息率历史分位 100
+RAW_KLINE_PCT = pd.DataFrame(
+    {
+        "date": pd.bdate_range("2026-01-05", periods=260),
+        "close": [20.0 - index * 0.01 for index in range(260)],
+    }
+)
 DIVIDENDS_A = _dividends(
     [
         ("2022-06-10", 1.0),
@@ -204,6 +213,7 @@ def _happy_overrides(**extra):
             STOCK_A: KLINE_A,
             STOCK_B: KLINE_B,
         }[code],
+        "get_kline_raw": lambda code, days=790: RAW_KLINE_PCT,
         "get_dividend_history": lambda code: {
             STOCK_A: DIVIDENDS_A,
             STOCK_B: DIVIDENDS_B,
@@ -387,6 +397,47 @@ def test_run_scores_dividend_trend(monkeypatch, tmp_path):
     # DIVIDENDS_A：近 3 年 3.0 vs 前 3 年 2.0 → +50%（tier 1.0，满分档并入亮点）
     row = _row_for(report, "平安银行")
     assert "分红趋势 +50%" in row
+    assert "100.0" in row
+
+
+def test_run_scores_dividend_yield_percentile(monkeypatch, tmp_path):
+    rules = {
+        "stocks": {
+            "indicators": {
+                "dividend_yield_percentile": {
+                    "weight": 100,
+                    "thresholds": {"high": 70, "mid": 40},
+                }
+            }
+        },
+        "funds": {
+            "indicators": {
+                "discount_rate": {
+                    "weight": 100,
+                    "thresholds": {"discount": -1, "premium": 1},
+                }
+            }
+        },
+        "data": {"kline_days": 120, "pe_cache_days": 7},
+    }
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    for filename, payload in (
+        ("stocks.yaml", STOCKS_CONFIG),
+        ("funds.yaml", FUNDS_CONFIG),
+        ("rules.yaml", rules),
+        ("dividend_index.yaml", CONSTITUENTS_CONFIG),
+    ):
+        (config_dir / filename).write_text(
+            yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8"
+        )
+    _patch_data(monkeypatch, **_happy_overrides())
+
+    report = main.run(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
+
+    # 平安银行：价格一路下行、每年稳定派 1 元 → 当前股息率为窗口最高 → 满分档
+    row = _row_for(report, "平安银行")
+    assert "股息率分位 100%" in row
     assert "100.0" in row
 
 
