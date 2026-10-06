@@ -46,6 +46,7 @@ funds:
 data:
   kline_days: 120
   pe_cache_days: 7
+  financial_cache_days: 30   # 年报可持续性数据的缓存天数（季度更新）
 
 # 输出参数
 output:

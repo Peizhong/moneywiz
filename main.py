@@ -76,7 +76,14 @@ def _quote_row(quotes, code):
 
 
 def _stock_result(
-    stock, spot, cache_dir, as_of, kline_days, pe_cache_days, rules_section
+    stock,
+    spot,
+    cache_dir,
+    as_of,
+    kline_days,
+    pe_cache_days,
+    financial_cache_days,
+    rules_section,
 ):
     """组装一只股票：每个数据源独立降级，任一失败只影响对应指标。"""
     row = _spot_row(spot, stock.code)
@@ -126,17 +133,23 @@ def _stock_result(
         rules_section,
         tech,
         position=_num(indicators.calc_price_position(kline)),
-        sustainability=_sustainability(stock.code, dividends, as_of),
+        sustainability=_sustainability(
+            stock.code, dividends, as_of, cache_dir, financial_cache_days
+        ),
     )
 
 
-def _sustainability(code, dividends, as_of):
+def _sustainability(code, dividends, as_of, cache_dir, financial_cache_days):
     """分红可持续性（仅标注，不参与打分）：盈利下滑 / 经营现金流为负 / 分红超现金流。
 
-    数据来自年报口径的 ``get_financial_health``；任一数据缺失只影响对应警示。
+    数据来自年报口径的 ``get_financial_health``（带 cache_days 缓存）；任一数据缺失
+    只影响对应警示。
     """
     health = _fetch(
-        lambda: data.get_financial_health(code), f"get_financial_health({code})"
+        lambda: data.get_financial_health(
+            code, cache_dir, cache_days=financial_cache_days
+        ),
+        f"get_financial_health({code})",
     )
     if health is None:
         return None
@@ -285,6 +298,7 @@ def run(
             as_of,
             kline_days,
             pe_cache_days,
+            cfg.rules["data"]["financial_cache_days"],
             cfg.rules["stocks"],
         )
         for stock in cfg.stocks

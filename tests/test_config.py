@@ -136,7 +136,11 @@ def test_output_defaults_when_section_absent(tmp_path):
 
     assert cfg.output["buy_top_n"] == 5
     assert cfg.output["avoid_bottom_n"] == 5
-    assert cfg.rules["data"] == {"kline_days": 120, "pe_cache_days": 7}
+    assert cfg.rules["data"] == {
+        "kline_days": 120,
+        "pe_cache_days": 7,
+        "financial_cache_days": 30,
+    }
 
 
 def test_fund_index_defaults_to_none(tmp_path):
@@ -154,6 +158,7 @@ def test_load_real_project_config():
     cfg = load_config(PROJECT_ROOT / "config")
 
     assert cfg.rules["data"]["pe_cache_days"] == 7
+    assert cfg.rules["data"]["financial_cache_days"] == 30
     assert all(s.code and s.name for s in cfg.stocks)
     assert all(f.code and f.name and f.type in FUND_TYPES for f in cfg.funds)
 

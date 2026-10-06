@@ -196,7 +196,7 @@ def _happy_overrides(**extra):
         "get_index_pe_history": lambda symbol: INDEX_PE,
         "get_index_dividend_yield": lambda index_code="000922": 4.2,
         "get_10y_bond_yield": lambda: 1.8,
-        "get_financial_health": lambda code: {
+        "get_financial_health": lambda code, cache_dir, cache_days=30: {
             "eps_growth": 6.0,
             "op_cash_per_share": 2.0,
             "payout_stmt": 40.0,
@@ -286,7 +286,7 @@ def test_run_kline_failure_keeps_other_indicators_scoring(
 
 
 def test_run_surfaces_sustainability_warnings(monkeypatch, config_dir, tmp_path):
-    def health(code):
+    def health(code, cache_dir, cache_days=30):
         return {"eps_growth": -12.6, "op_cash_per_share": 0.5, "payout_stmt": 118.0}
 
     _patch_data(monkeypatch, **_happy_overrides(get_financial_health=health))

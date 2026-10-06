@@ -46,6 +46,7 @@ SPOT_COLUMNS = ("code", "name", "price", "pe", "pb")
 KLINE_COLUMNS = ("date", "close")
 DIVIDEND_COLUMNS = ("date", "dividend_per_share")
 PE_CACHE_FILENAME = "pe_cache.json"
+FINANCIAL_CACHE_FILENAME = "financial_cache.json"
 
 FUND_QUOTE_COLUMNS = ("code", "name", "price", "iopv")
 FUND_NAV_COLUMNS = ("date", "close")
@@ -400,17 +401,19 @@ def _positive_median(frame: pd.DataFrame, column: str) -> float | None:
     return float(values.median())
 
 
-def _load_cache(cache_path: Path) -> dict:
-    """读取缓存；文件缺失、JSON 损坏或形状不符一律视为空缓存（绝不抛错）。"""
+def _load_cache(cache_path: Path, keys=("stocks", "industries")) -> dict:
+    """读取缓存；文件缺失、JSON 损坏或形状不符一律视为空缓存（绝不抛错）。
+
+    ``keys`` 为期望的顶层映射（PE 缓存为 stocks+industries，财报缓存只用 stocks）。
+    """
     try:
         raw = json.loads(cache_path.read_text(encoding="utf-8"))
-        stocks = raw["stocks"]
-        industries = raw["industries"]
-        if not isinstance(stocks, dict) or not isinstance(industries, dict):
+        data = {key: raw[key] for key in keys}
+        if not all(isinstance(value, dict) for value in data.values()):
             raise TypeError("缓存形状不符")
-        return {"stocks": stocks, "industries": industries}
+        return data
     except (OSError, ValueError, KeyError, TypeError):
-        return {"stocks": {}, "industries": {}}
+        return {key: {} for key in keys}
 
 
 def _save_cache(cache_path: Path, cache: dict) -> None:
@@ -679,12 +682,26 @@ def get_index_pe_history(index_symbol: str) -> pd.DataFrame | None:
 # ---------------------------------------------------------------------------
 
 
-def get_financial_health(code: str) -> dict | None:
-    """个股年报口径的可持续性指标；失败或无年报行 → None。
+def get_financial_health(
+    code: str, cache_dir, cache_days: int = 30
+) -> dict | None:
+    """个股年报口径的可持续性指标（缓存 cache_days 天）；失败或无年报行 → None。
 
     来源 ``stock_financial_analysis_indicator``（新浪，按报告期升序），取最近一个
     12-31 年报行：``净利润增长率(%)``、``每股经营性现金流(元)``、``股息发放率(%)``。
+    财报季度更新，缓存 ``cache_dir/financial_cache.json``；失败不写缓存。
     """
+    cache_path = Path(cache_dir) / FINANCIAL_CACHE_FILENAME
+    cache = _load_cache(cache_path, keys=("stocks",))
+    entry = cache["stocks"].get(code)
+    if isinstance(entry, dict) and _is_fresh(entry.get("updated_at"), cache_days):
+        values = {
+            key: entry.get(key)
+            for key in ("eps_growth", "op_cash_per_share", "payout_stmt")
+        }
+        if all(v is None or isinstance(v, (int, float)) for v in values.values()):
+            return values
+
     start_year = str(date.today().year - 3)
     raw = _call(ak.stock_financial_analysis_indicator, symbol=code, start_year=start_year)
     if raw is None or raw.empty or "日期" not in raw.columns:
@@ -702,11 +719,14 @@ def get_financial_health(code: str) -> dict | None:
         value = pd.to_numeric(latest[column], errors="coerce")
         return None if pd.isna(value) else float(value)
 
-    return {
+    result = {
         "eps_growth": _value("净利润增长率(%)"),
         "op_cash_per_share": _value("每股经营性现金流(元)"),
         "payout_stmt": _value("股息发放率(%)"),
     }
+    cache["stocks"][code] = {**result, "updated_at": datetime.now().isoformat()}
+    _save_cache(cache_path, cache)
+    return result
 
 
 # ---------------------------------------------------------------------------

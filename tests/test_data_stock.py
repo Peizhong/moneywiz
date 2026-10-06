@@ -3,8 +3,9 @@
 全部通过 monkeypatch akshare 函数返回真实列名的原始帧，不联网。
 """
 
+import json
 import logging
-from datetime import date
+from datetime import date, datetime, timedelta
 
 import akshare as ak
 import pandas as pd
@@ -477,7 +478,7 @@ def _financial_frame():
     )
 
 
-def test_financial_health_uses_latest_annual_row(monkeypatch):
+def test_financial_health_uses_latest_annual_row(monkeypatch, tmp_path):
     calls = {}
 
     def fake(symbol, start_year):
@@ -487,7 +488,7 @@ def test_financial_health_uses_latest_annual_row(monkeypatch):
 
     monkeypatch.setattr(ak, "stock_financial_analysis_indicator", fake)
 
-    out = get_financial_health("600015")
+    out = get_financial_health("600015", tmp_path)
 
     assert out == {
         "eps_growth": pytest.approx(-12.6),
@@ -498,7 +499,7 @@ def test_financial_health_uses_latest_annual_row(monkeypatch):
     assert int(calls["start_year"]) <= date.today().year - 3  # 只请求近几年的报告
 
 
-def test_financial_health_without_annual_rows_returns_none(monkeypatch):
+def test_financial_health_without_annual_rows_returns_none(monkeypatch, tmp_path):
     quarterly_only = pd.DataFrame(
         {"日期": ["2026-06-30"], "每股经营性现金流(元)": [0.6]}
     )
@@ -506,16 +507,73 @@ def test_financial_health_without_annual_rows_returns_none(monkeypatch):
         ak, "stock_financial_analysis_indicator", lambda symbol, start_year: quarterly_only
     )
 
-    assert get_financial_health("600015") is None
+    assert get_financial_health("600015", tmp_path) is None
 
 
-def test_financial_health_failure_returns_none(monkeypatch):
+def test_financial_health_failure_returns_none_and_is_not_cached(monkeypatch, tmp_path):
     def boom(symbol, start_year):
         raise ConnectionError("网络超时")
 
     monkeypatch.setattr(ak, "stock_financial_analysis_indicator", boom)
 
-    assert get_financial_health("600015") is None
+    assert get_financial_health("600015", tmp_path) is None
+    assert not (tmp_path / "financial_cache.json").exists()  # 失败不写缓存
+
+
+def test_financial_health_cache_hit_skips_upstream(monkeypatch, tmp_path):
+    calls = []
+
+    def fake(symbol, start_year):
+        calls.append(1)
+        return _financial_frame()
+
+    monkeypatch.setattr(ak, "stock_financial_analysis_indicator", fake)
+
+    first = get_financial_health("600015", tmp_path)
+    second = get_financial_health("600015", tmp_path)
+
+    assert first == second
+    assert len(calls) == 1  # 第二次命中缓存，未再请求上游
+    assert (tmp_path / "financial_cache.json").exists()
+
+
+def test_financial_health_cache_expiry_refetches(monkeypatch, tmp_path):
+    stale = {
+        "stocks": {
+            "600015": {
+                "eps_growth": 1.0,
+                "op_cash_per_share": 2.0,
+                "payout_stmt": None,
+                "updated_at": (datetime.now() - timedelta(days=31)).isoformat(),
+            }
+        }
+    }
+    (tmp_path / "financial_cache.json").write_text(
+        json.dumps(stale, ensure_ascii=False), encoding="utf-8"
+    )
+    calls = []
+
+    def fake(symbol, start_year):
+        calls.append(1)
+        return _financial_frame()
+
+    monkeypatch.setattr(ak, "stock_financial_analysis_indicator", fake)
+
+    out = get_financial_health("600015", tmp_path)
+
+    assert len(calls) == 1  # 过期条目重新拉取
+    assert out["eps_growth"] == pytest.approx(-12.6)
+
+
+def test_financial_health_corrupt_cache_rebuilds(monkeypatch, tmp_path):
+    (tmp_path / "financial_cache.json").write_text("{not json", encoding="utf-8")
+    monkeypatch.setattr(
+        ak,
+        "stock_financial_analysis_indicator",
+        lambda symbol, start_year: _financial_frame(),
+    )
+
+    assert get_financial_health("600015", tmp_path) is not None
 
 
 def test_reset_quote_source_state_retries_eastmoney(monkeypatch):

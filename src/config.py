@@ -12,7 +12,11 @@ from typing import Any
 import yaml
 
 FUND_TYPES = {"etf", "lof", "normal"}
-DEFAULT_DATA: dict[str, int] = {"kline_days": 120, "pe_cache_days": 7}
+DEFAULT_DATA: dict[str, int] = {
+    "kline_days": 120,
+    "pe_cache_days": 7,
+    "financial_cache_days": 30,
+}
 DEFAULT_OUTPUT: dict[str, int] = {"buy_top_n": 5, "avoid_bottom_n": 5}
 
 FILENAMES = {"stocks": "stocks.yaml", "funds": "funds.yaml", "rules": "rules.yaml"}
