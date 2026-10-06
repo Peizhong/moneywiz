@@ -4,36 +4,6 @@
 #   2) 按 TTM 股息率（近 12 个月已实施分红 ÷ 现价）降序取前 20，再按人工取舍
 # 红利指数成分股单独维护在 dividend_index.yaml（自动刷新），运行时两者合并扫描。
 stocks:
-- code: '002572'
-  name: 索菲亚
-- code: '601717'
-  name: 中创智领
-- code: '002233'
-  name: 塔牌集团
-- code: '601216'
-  name: 君正集团
-- code: '600153'
-  name: 建发股份
-- code: '000651'
-  name: 格力电器
-- code: '601318'
-  name: 中国平安
-- code: '000157'
-  name: 中联重科
-- code: '600015'
-  name: 华夏银行
-- code: '600741'
-  name: 华域汽车
-- code: '600502'
-  name: 安徽建工
-- code: '601668'
-  name: 中国建筑
-- code: '601928'
-  name: 凤凰传媒
-- code: '601339'
-  name: 百隆东方
-- code: '601166'
-  name: 兴业银行
 - code: '000001'
   name: 平安银行
 - code: '600036'
@@ -42,9 +12,13 @@ stocks:
   name: 工商银行
 - code: '601988'
   name: 中国银行
-- code: 000429
+- code: '000429'
   name: 粤高速
 - code: '600900'
   name: 长江电力
 - code: '600023'
   name: 浙能电力
+- code: '600690'
+  name: '海尔智家'
+- code: '000651'
+  name: '格力电器'
