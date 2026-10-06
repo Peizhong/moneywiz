@@ -1,8 +1,8 @@
-"""红利指数成分股的定期刷新。
+"""红利指数成分股的定期刷新（支持多个指数）。
 
-``dividend_index.yaml`` 的 ``updated_at`` 超过 ``ttl_days`` 时向中证指数官网
-重新拉取；新增成分股写入 ``added`` 字段（YYYY-MM-DD），调出的个股从文件中移除。
-刷新失败时沿用现有名单，绝不中断运行。
+``dividend_index.yaml`` 中每个指数的 ``updated_at`` 超过 ``ttl_days`` 时向中证指数
+官网重新拉取；新增成分股写入 ``added`` 字段（YYYY-MM-DD），调出的个股从文件中移除。
+刷新失败时该指数沿用现有名单，绝不中断运行。
 """
 
 from __future__ import annotations
@@ -18,38 +18,103 @@ from src import data
 logger = logging.getLogger(__name__)
 
 FILE_HEADER = (
-    "# 红利指数成分股，自动维护：\n"
-    "# updated_at 超过 index_refresh_days（rules.yaml，默认 14 天）时自动向中证指数官网刷新；\n"
-    "# 新加入的成分股带 added 字段（YYYY-MM-DD），并在报告表格中标注 (新增)。\n"
+    "# 红利指数成分股，自动维护（多个指数，各自独立的 updated_at）：\n"
+    "# 某指数 updated_at 超过 index_refresh_days（rules.yaml，默认 14 天）时自动向中证指数\n"
+    "# 官网刷新；新加入的成分股带 added 字段（YYYY-MM-DD），并在报告表格中标注 (新增)。\n"
 )
 
 
-def refresh_constituents(
-    index_path: Path, index_code: str, ttl_days: int, today: date | None = None
+def refresh_indices(
+    index_path: Path, indices, ttl_days: int, today: date | None = None
 ) -> dict:
-    """过期则刷新成分股文件；返回含有效名单的结果 dict。
+    """逐个指数检查 TTL 并刷新，最后重写文件；返回合并结果。
 
-    返回 ``{"refreshed", "added", "removed", "error", "constituents"}``：
-    ``constituents`` 是刷新后（或沿用）的条目列表（``code/name/added``）。
+    ``indices`` 为配置中的 ``IndexCfg`` 列表（其 ``updated_at`` 与 ``constituents``
+    即文件当前内容）。返回 ``{"refreshed", "added", "removed", "error", "constituents"}``：
+    ``constituents`` 是全部指数刷新后（或沿用）的条目合并列表（``code/name/added``），
+    供扫描使用。文件总是按当前内容重写（格式归一），失败指数保持原 ``updated_at``。
     """
     today = today or date.today()
     path = Path(index_path)
-    payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    updated_at = datetime.fromisoformat(str(payload.get("updated_at")))
-    old_entries = [dict(item) for item in payload.get("constituents") or []]
+    merged: list[dict] = []
+    added_all: list[str] = []
+    removed_all: list[str] = []
+    errors: list[str] = []
+    refreshed_any = False
+    output: list[dict] = []
 
-    if datetime.now() - updated_at < timedelta(days=ttl_days):
-        return _result(refreshed=False, old_entries=old_entries)
+    for index in indices:
+        old_entries = [
+            {"code": c.code, "name": c.name, **({"added": c.added} if c.added else {})}
+            for c in index.constituents
+        ]
+        entries, updated_at = old_entries, index.updated_at
 
-    fresh = data.get_index_constituents(index_code)
-    if fresh is None:
-        logger.warning(
-            "成分股刷新失败，沿用现有名单（updated_at=%s）", payload.get("updated_at")
+        if datetime.now() - index.updated_at >= timedelta(days=ttl_days):
+            fresh = data.get_index_constituents(index.index_code)
+            if fresh is None:
+                logger.warning(
+                    "成分股刷新失败（%s %s），沿用现有名单",
+                    index.index_code,
+                    index.index_name,
+                )
+                errors.append(f"{index.index_code} 获取失败")
+            else:
+                entries, added, removed = _rebuild_entries(fresh, old_entries, today)
+                updated_at = datetime.now()
+                refreshed_any = True
+                added_all.extend(added)
+                removed_all.extend(removed)
+                if added:
+                    names = "、".join(
+                        f"{e['code']} {e['name']}"
+                        for e in entries
+                        if e["code"] in set(added)
+                    )
+                    logger.info(
+                        "成分股更新（%s %s）：新增 %d 只（%s）",
+                        index.index_code,
+                        index.index_name,
+                        len(added),
+                        names,
+                    )
+                if removed:
+                    logger.info(
+                        "成分股更新（%s %s）：调出 %d 只（%s）",
+                        index.index_code,
+                        index.index_name,
+                        len(removed),
+                        "、".join(removed),
+                    )
+
+        merged.extend(entries)
+        output.append(
+            {
+                "index_code": index.index_code,
+                "index_name": index.index_name,
+                "updated_at": updated_at.isoformat(timespec="seconds"),
+                "constituents": entries,
+            }
         )
-        return _result(refreshed=False, error="获取失败", old_entries=old_entries)
 
-    old_by_code = {str(item.get("code")): item for item in old_entries}
-    entries, added = [], []
+    path.write_text(
+        FILE_HEADER + yaml.safe_dump({"indices": output}, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    return {
+        "refreshed": refreshed_any,
+        "added": added_all,
+        "removed": removed_all,
+        "error": "；".join(errors) if errors else None,
+        "constituents": merged,
+    }
+
+
+def _rebuild_entries(fresh, old_entries: list[dict], today: date) -> tuple[list[dict], list[str], list[str]]:
+    """按最新名单重建条目：保留原有 added、标记新成员、列出调出。"""
+    old_by_code = {str(entry["code"]): entry for entry in old_entries}
+    entries: list[dict] = []
+    added: list[str] = []
     for row in fresh.itertuples():
         code, name = str(row.code), str(row.name)
         entry = {"code": code, "name": name}
@@ -60,40 +125,13 @@ def refresh_constituents(
             entry["added"] = today.isoformat()
             added.append(code)
         entries.append(entry)
-
     removed = sorted(set(old_by_code) - {entry["code"] for entry in entries})
-    new_payload = {
-        "index_code": index_code,
-        "updated_at": datetime.now().isoformat(timespec="seconds"),
-        "constituents": entries,
-    }
-    path.write_text(
-        FILE_HEADER + yaml.safe_dump(new_payload, allow_unicode=True, sort_keys=False),
-        encoding="utf-8",
-    )
-    if added:
-        names = "、".join(
-            f"{e['code']} {e['name']}" for e in entries if e["code"] in added
-        )
-        logger.info("成分股更新：新增 %d 只（%s）", len(added), names)
-    if removed:
-        logger.info("成分股更新：调出 %d 只（%s）", len(removed), "、".join(removed))
-    return _result(
-        refreshed=True, added=added, removed=removed, entries=entries
-    )
+    return entries, added, removed
 
 
-def _result(refreshed, added=None, removed=None, error=None, entries=None, old_entries=None):
-    return {
-        "refreshed": refreshed,
-        "added": added or [],
-        "removed": removed or [],
-        "error": error,
-        "constituents": entries if entries is not None else (old_entries or []),
-    }
-
-
-def new_constituent_codes(entries: list[dict], ttl_days: int, today: date | None = None) -> set[str]:
+def new_constituent_codes(
+    entries: list[dict], ttl_days: int, today: date | None = None
+) -> set[str]:
     """``added`` 在 ``ttl_days`` 之内的成分股代码集合（用于报告里的 (新增) 标注）。"""
     today = today or date.today()
     cutoff = today - timedelta(days=ttl_days)

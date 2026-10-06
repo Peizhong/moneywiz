@@ -87,9 +87,14 @@ DATA_FUNCTIONS = (
 
 
 CONSTITUENTS_CONFIG = {
-    "index_code": "000015",
-    "updated_at": "2026-10-06T12:00:00",
-    "constituents": [{"code": "601088", "name": "中国神华"}],
+    "indices": [
+        {
+            "index_code": "000015",
+            "index_name": "上证红利",
+            "updated_at": "2026-10-06T12:00:00",
+            "constituents": [{"code": "601088", "name": "中国神华"}],
+        }
+    ]
 }
 
 
@@ -188,7 +193,7 @@ def _patch_data(monkeypatch, constituents_result=None, **overrides):
         "error": None,
         "constituents": constituents_result or [],
     }
-    monkeypatch.setattr(constituents, "refresh_constituents", lambda *a, **k: stub)
+    monkeypatch.setattr(constituents, "refresh_indices", lambda *a, **k: stub)
 
 
 def _happy_overrides(**extra):

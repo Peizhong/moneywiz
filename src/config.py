@@ -56,14 +56,20 @@ class ConstituentCfg:
 
 
 @dataclass
+class IndexCfg:
+    index_code: str
+    index_name: str
+    updated_at: datetime
+    constituents: list[ConstituentCfg]
+
+
+@dataclass
 class Config:
     stocks: list[StockCfg]
     funds: list[FundCfg]
     rules: dict
     output: dict
-    index_code: str
-    constituents: list[ConstituentCfg]
-    constituents_updated_at: datetime
+    indices: list[IndexCfg]
 
 
 def load_config(config_dir: Path = Path("config")) -> Config:
@@ -77,54 +83,68 @@ def load_config(config_dir: Path = Path("config")) -> Config:
     stocks = _parse_stocks(config_dir / FILENAMES["stocks"], raw["stocks"])
     funds = _parse_funds(config_dir / FILENAMES["funds"], raw["funds"])
     rules, output = _parse_rules(config_dir / FILENAMES["rules"], raw["rules"])
-    index_code, constituents, updated_at = _parse_constituents(
-        config_dir / FILENAMES["constituents"], raw["constituents"]
-    )
+    indices = _parse_indices(config_dir / FILENAMES["constituents"], raw["constituents"])
     return Config(
         stocks=stocks,
         funds=funds,
         rules=rules,
         output=output,
-        index_code=index_code,
-        constituents=constituents,
-        constituents_updated_at=updated_at,
+        indices=indices,
     )
 
 
-def _parse_constituents(path: Path, data: Any) -> tuple[str, list[ConstituentCfg], datetime]:
-    """校验 dividend_index.yaml：index_code、updated_at、constituents（code/name/可选 added）。"""
+def _parse_indices(path: Path, data: Any) -> list[IndexCfg]:
+    """校验 dividend_index.yaml：``indices`` 列表，每项含 index_code / updated_at /
+    constituents（code/name/可选 added）；index_name 可选。"""
     if not isinstance(data, dict):
         raise ConfigError(f"{path}: 顶层必须是映射，实际为 {type(data).__name__}")
-    index_code = data.get("index_code")
-    if not isinstance(index_code, str) or not index_code:
-        raise ConfigError(f"{path}: 'index_code' 缺失或不是非空字符串")
+    items = _list_section(path, "indices", data)
+    if not items:
+        raise ConfigError(f"{path}: 'indices' 不能为空")
 
-    updated_raw = data.get("updated_at")
-    try:
-        updated_at = datetime.fromisoformat(str(updated_raw))
-    except ValueError as exc:
-        raise ConfigError(
-            f"{path}: 'updated_at' 缺失或不是 ISO 时间格式（实际为 {updated_raw!r}）"
-        ) from exc
-
-    items = _list_section(path, "constituents", data)
-    constituents = []
+    indices = []
     for item in items:
         if not isinstance(item, dict):
-            raise ConfigError(f"{path}: constituents 的每项必须是映射")
-        code = _required_str(path, item, "code", "成分股 code")
-        name = _required_str(path, item, "name", "成分股 name")
-        added = item.get("added")
-        if added is not None:
-            try:
-                date.fromisoformat(str(added))
-            except ValueError as exc:
-                raise ConfigError(
-                    f"{path}: 成分股 {code} 的 'added' 不是 YYYY-MM-DD 日期（{added!r}）"
-                ) from exc
-            added = str(added)
-        constituents.append(ConstituentCfg(code=code, name=name, added=added))
-    return index_code, constituents, updated_at
+            raise ConfigError(f"{path}: indices 的每项必须是映射")
+        index_code = _required_str(path, item, "index_code", "指数 index_code")
+        index_name = item.get("index_name") or index_code
+        if not isinstance(index_name, str):
+            raise ConfigError(f"{path}: 指数 {index_code} 的 'index_name' 必须是字符串")
+        updated_raw = item.get("updated_at")
+        try:
+            updated_at = datetime.fromisoformat(str(updated_raw))
+        except ValueError as exc:
+            raise ConfigError(
+                f"{path}: 指数 {index_code} 的 'updated_at' 缺失或不是 ISO 时间格式"
+                f"（实际为 {updated_raw!r}）"
+            ) from exc
+
+        constituents = []
+        for entry in item.get("constituents") or []:
+            if not isinstance(entry, dict):
+                raise ConfigError(f"{path}: 指数 {index_code} 的 constituents 每项必须是映射")
+            code = _required_str(path, entry, "code", f"指数 {index_code} 成分股 code")
+            name = _required_str(path, entry, "name", f"指数 {index_code} 成分股 name")
+            added = entry.get("added")
+            if added is not None:
+                try:
+                    date.fromisoformat(str(added))
+                except ValueError as exc:
+                    raise ConfigError(
+                        f"{path}: 指数 {index_code} 成分股 {code} 的 'added' 不是 YYYY-MM-DD"
+                        f" 日期（{added!r}）"
+                    ) from exc
+                added = str(added)
+            constituents.append(ConstituentCfg(code=code, name=name, added=added))
+        indices.append(
+            IndexCfg(
+                index_code=index_code,
+                index_name=index_name,
+                updated_at=updated_at,
+                constituents=constituents,
+            )
+        )
+    return indices
 
 
 def _load_yaml(path: Path) -> Any:

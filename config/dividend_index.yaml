@@ -1,106 +1,316 @@
-# 上证红利指数（510880 跟踪）成分股，自动维护：
-# updated_at 超过 index_refresh_days（rules.yaml，默认 14 天）时自动向中证指数官网刷新；
-# 新加入的成分股带 added 字段（YYYY-MM-DD），并在报告表格中标注 (新增)。
-index_code: '000015'
-updated_at: '2026-10-06T12:32:53'
-constituents:
-- code: '600015'
-  name: 华夏银行
-- code: '600028'
-  name: 中国石化
-- code: '600039'
-  name: 四川路桥
-- code: '600096'
-  name: 云天化
-- code: '600123'
-  name: 兰花科创
-- code: '600153'
-  name: 建发股份
-- code: '600177'
-  name: 雅戈尔
-- code: '600188'
-  name: 兖矿能源
-- code: '600256'
-  name: 广汇能源
-- code: '600282'
-  name: 南钢股份
-- code: '600295'
-  name: 鄂尔多斯
-- code: '600350'
-  name: 山东高速
-- code: '600398'
-  name: 海澜之家
-- code: '600546'
-  name: 山煤国际
-- code: '600737'
-  name: 中粮糖业
-- code: '600755'
-  name: 厦门国贸
-- code: '600901'
-  name: 江苏金租
-- code: '600919'
-  name: 江苏银行
-- code: '600938'
-  name: 中国海油
-- code: '600971'
-  name: 恒源煤电
-- code: '600985'
-  name: 淮北矿业
-- code: '600997'
-  name: 开滦股份
-- code: '601000'
-  name: 唐山港
-- code: '601001'
-  name: 晋控煤业
-- code: '601006'
-  name: 大秦铁路
-- code: '601009'
-  name: 南京银行
-- code: '601077'
-  name: 渝农商行
-- code: '601088'
-  name: 中国神华
-- code: '601166'
-  name: 兴业银行
-- code: '601168'
-  name: 西部矿业
-- code: '601169'
-  name: 北京银行
-- code: '601225'
-  name: 陕西煤业
-- code: '601229'
-  name: 上海银行
-- code: '601288'
-  name: 农业银行
-- code: '601328'
-  name: 交通银行
-- code: '601339'
-  name: 百隆东方
-- code: '601398'
-  name: 工商银行
-- code: '601666'
-  name: 平煤股份
-- code: '601699'
-  name: 潞安环能
-- code: '601717'
-  name: 中创智领
-- code: '601818'
-  name: 光大银行
-- code: '601825'
-  name: 沪农商行
-- code: '601838'
-  name: 成都银行
-- code: '601857'
-  name: 中国石油
-- code: '601916'
-  name: 浙商银行
-- code: '601919'
-  name: 中远海控
-- code: '601939'
-  name: 建设银行
-- code: '601988'
-  name: 中国银行
-- code: '601998'
-  name: 中信银行
-- code: '603565'
-  name: 中谷物流
+# 红利指数成分股，自动维护（多个指数，各自独立的 updated_at）：
+# 某指数 updated_at 超过 index_refresh_days（rules.yaml，默认 14 天）时自动向中证指数
+# 官网刷新；新加入的成分股带 added 字段（YYYY-MM-DD），并在报告表格中标注 (新增)。
+indices:
+- index_code: '000015'
+  index_name: 上证红利
+  updated_at: '2026-10-06T12:32:53'
+  constituents:
+  - code: '600015'
+    name: 华夏银行
+  - code: '600028'
+    name: 中国石化
+  - code: '600039'
+    name: 四川路桥
+  - code: '600096'
+    name: 云天化
+  - code: '600123'
+    name: 兰花科创
+  - code: '600153'
+    name: 建发股份
+  - code: '600177'
+    name: 雅戈尔
+  - code: '600188'
+    name: 兖矿能源
+  - code: '600256'
+    name: 广汇能源
+  - code: '600282'
+    name: 南钢股份
+  - code: '600295'
+    name: 鄂尔多斯
+  - code: '600350'
+    name: 山东高速
+  - code: '600398'
+    name: 海澜之家
+  - code: '600546'
+    name: 山煤国际
+  - code: '600737'
+    name: 中粮糖业
+  - code: '600755'
+    name: 厦门国贸
+  - code: '600901'
+    name: 江苏金租
+  - code: '600919'
+    name: 江苏银行
+  - code: '600938'
+    name: 中国海油
+  - code: '600971'
+    name: 恒源煤电
+  - code: '600985'
+    name: 淮北矿业
+  - code: '600997'
+    name: 开滦股份
+  - code: '601000'
+    name: 唐山港
+  - code: '601001'
+    name: 晋控煤业
+  - code: '601006'
+    name: 大秦铁路
+  - code: '601009'
+    name: 南京银行
+  - code: '601077'
+    name: 渝农商行
+  - code: '601088'
+    name: 中国神华
+  - code: '601166'
+    name: 兴业银行
+  - code: '601168'
+    name: 西部矿业
+  - code: '601169'
+    name: 北京银行
+  - code: '601225'
+    name: 陕西煤业
+  - code: '601229'
+    name: 上海银行
+  - code: '601288'
+    name: 农业银行
+  - code: '601328'
+    name: 交通银行
+  - code: '601339'
+    name: 百隆东方
+  - code: '601398'
+    name: 工商银行
+  - code: '601666'
+    name: 平煤股份
+  - code: '601699'
+    name: 潞安环能
+  - code: '601717'
+    name: 中创智领
+  - code: '601818'
+    name: 光大银行
+  - code: '601825'
+    name: 沪农商行
+  - code: '601838'
+    name: 成都银行
+  - code: '601857'
+    name: 中国石油
+  - code: '601916'
+    name: 浙商银行
+  - code: '601919'
+    name: 中远海控
+  - code: '601939'
+    name: 建设银行
+  - code: '601988'
+    name: 中国银行
+  - code: '601998'
+    name: 中信银行
+  - code: '603565'
+    name: 中谷物流
+- index_code: '931468'
+  index_name: 红利质量
+  updated_at: '2026-10-06T16:22:06'
+  constituents:
+  - code: '000423'
+    name: 东阿阿胶
+  - code: '000513'
+    name: 丽珠集团
+  - code: '000651'
+    name: 格力电器
+  - code: 000933
+    name: 神火股份
+  - code: 000975
+    name: 山金国际
+  - code: '001316'
+    name: 润贝航科
+  - code: '001337'
+    name: 四川黄金
+  - code: 002039
+    name: 黔源电力
+  - code: 002128
+    name: 电投能源
+  - code: '002415'
+    name: 海康威视
+  - code: '002532'
+    name: 天山铝业
+  - code: 002558
+    name: 巨人网络
+  - code: 002648
+    name: 卫星化学
+  - code: 002832
+    name: 比音勒芬
+  - code: 002847
+    name: 盐津铺子
+  - code: 002901
+    name: 大博医疗
+  - code: 002916
+    name: 深南电路
+  - code: '300033'
+    name: 同花顺
+  - code: '300373'
+    name: 扬杰科技
+  - code: '300558'
+    name: 贝达药业
+  - code: '300573'
+    name: 兴齐眼药
+  - code: '300693'
+    name: 盛弘股份
+  - code: '300760'
+    name: 迈瑞医疗
+  - code: '300770'
+    name: 新媒股份
+  - code: '300841'
+    name: 康华生物
+  - code: '300957'
+    name: 贝泰妮
+  - code: '301345'
+    name: 涛涛车业
+  - code: '600012'
+    name: 皖通高速
+  - code: '600211'
+    name: 西藏药业
+  - code: '600309'
+    name: 万华化学
+  - code: '600323'
+    name: 瀚蓝环境
+  - code: '600535'
+    name: 天士力
+  - code: '600887'
+    name: 伊利股份
+  - code: '600900'
+    name: 长江电力
+  - code: '600938'
+    name: 中国海油
+  - code: '600989'
+    name: 宝丰能源
+  - code: '601869'
+    name: 长飞光纤
+  - code: '603195'
+    name: 公牛集团
+  - code: '603233'
+    name: 大参林
+  - code: '603345'
+    name: 安井食品
+  - code: '603444'
+    name: 吉比特
+  - code: '603699'
+    name: 纽威股份
+  - code: '603893'
+    name: 瑞芯微
+  - code: '603939'
+    name: 益丰药房
+  - code: '605117'
+    name: 德业股份
+  - code: '688025'
+    name: 杰普特
+  - code: '688111'
+    name: 金山办公
+  - code: '688127'
+    name: 蓝特光学
+  - code: '688188'
+    name: 柏楚电子
+  - code: '688578'
+    name: 艾力斯
+- index_code: H30269
+  index_name: 红利低波
+  updated_at: '2026-10-06T16:22:07'
+  constituents:
+  - code: '000001'
+    name: 平安银行
+  - code: '000333'
+    name: 美的集团
+  - code: 000429
+    name: 粤高速A
+  - code: '000651'
+    name: 格力电器
+  - code: 000708
+    name: 中信特钢
+  - code: '002233'
+    name: 塔牌集团
+  - code: 002469
+    name: 三维化学
+  - code: 002807
+    name: 江阴银行
+  - code: 002839
+    name: 张家港行
+  - code: 002966
+    name: 苏州银行
+  - code: '600007'
+    name: 中国国贸
+  - code: '600015'
+    name: 华夏银行
+  - code: '600016'
+    name: 民生银行
+  - code: '600036'
+    name: 招商银行
+  - code: '600350'
+    name: 山东高速
+  - code: '600461'
+    name: 洪城环境
+  - code: '600502'
+    name: 安徽建工
+  - code: '600566'
+    name: 济川药业
+  - code: '600737'
+    name: 中粮糖业
+  - code: '600750'
+    name: 华润江中
+  - code: '600757'
+    name: 长江传媒
+  - code: '600803'
+    name: 新奥股份
+  - code: '600820'
+    name: 隧道股份
+  - code: '600863'
+    name: 华能蒙电
+  - code: '600873'
+    name: 梅花生物
+  - code: '600919'
+    name: 江苏银行
+  - code: '600938'
+    name: 中国海油
+  - code: '600941'
+    name: 中国移动
+  - code: '601009'
+    name: 南京银行
+  - code: '601077'
+    name: 渝农商行
+  - code: '601169'
+    name: 北京银行
+  - code: '601187'
+    name: 厦门银行
+  - code: '601229'
+    name: 上海银行
+  - code: '601288'
+    name: 农业银行
+  - code: '601318'
+    name: 中国平安
+  - code: '601328'
+    name: 交通银行
+  - code: '601369'
+    name: 陕鼓动力
+  - code: '601398'
+    name: 工商银行
+  - code: '601577'
+    name: 长沙银行
+  - code: '601658'
+    name: 邮储银行
+  - code: '601665'
+    name: 齐鲁银行
+  - code: '601668'
+    name: 中国建筑
+  - code: '601825'
+    name: 沪农商行
+  - code: '601838'
+    name: 成都银行
+  - code: '601857'
+    name: 中国石油
+  - code: '601928'
+    name: 凤凰传媒
+  - code: '601939'
+    name: 建设银行
+  - code: '601963'
+    name: 重庆银行
+  - code: '601988'
+    name: 中国银行
+  - code: '601998'
+    name: 中信银行

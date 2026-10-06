@@ -325,9 +325,9 @@ def run(
     pe_cache_days = cfg.rules["data"]["pe_cache_days"]
 
     refresh_days = cfg.rules["data"]["index_refresh_days"]
-    refresh = constituents.refresh_constituents(
+    refresh = constituents.refresh_indices(
         config_dir / config.FILENAMES["constituents"],
-        cfg.index_code,
+        cfg.indices,
         refresh_days,
     )
     if refresh["error"]:
