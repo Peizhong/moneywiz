@@ -85,6 +85,22 @@ funds:
 配置错误时打印错误并返回退出码 1，
 正常结束返回 0。
 
+### Docker
+
+```bash
+docker build -t moneywiz .
+docker run --rm \
+  -v "$PWD/config":/app/config \
+  -v "$PWD/cache":/app/cache \
+  moneywiz
+docker run --rm moneywiz pytest    # 容器内跑测试
+```
+
+镜像内置一份 `config/` 作为默认值，挂载宿主 `config/` 即可用你自己的自选；挂载
+`cache/` 让缓存跨运行保留（不挂载则每次容器运行都是冷启动）。容器以非 root
+（uid 1000）运行，宿主目录属主不同时加 `-u "$(id -u):$(id -g)"`；时区默认
+`Asia/Shanghai`，可用 `-e TZ=...` 覆盖。
+
 ## 输出说明
 
 ```

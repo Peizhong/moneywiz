@@ -1,0 +1,12 @@
+# 本地虚拟环境与缓存不进镜像
+.venv/
+cache/
+.pytest_cache/
+__pycache__/
+*.pyc
+.superpowers/
+
+# 版本控制与文档
+.git/
+docs/
+CLAUDE.md
