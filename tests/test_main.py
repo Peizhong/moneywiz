@@ -1,23 +1,70 @@
 """main 编排入口（run / main）的集成测试。
 
 全部 ``src.data.*`` 均被 monkeypatch（规范形状 fixture），不联网；
-配置使用仓库内 ``config/``，以真实权重走通「配置 → 数据 → 指标 → 打分 → 报告」全链路。
+自选列表与评分规则由测试写入 ``tmp_path``，不依赖仓库内可由用户改动的 ``config/``，
+因此期望分数完全由本文件声明的权重/阈值推出。
 """
 
 from datetime import date
-from pathlib import Path
 
 import pandas as pd
+import pytest
+import yaml
 
 import main
 from src import config, data
 
-CONFIG_DIR = Path(__file__).resolve().parents[1] / "config"
 AS_OF = date(2026, 10, 6)
 
 STOCK_A = "000001"  # 平安银行（分红强）
 STOCK_B = "600036"  # 招商银行（分红弱）
 FUND_CODE = "510880"  # 红利ETF
+
+# 与 config/rules.yaml 同口径：股票/基金权重各自合计 100
+STOCKS_CONFIG = {
+    "stocks": [
+        {"code": STOCK_A, "name": "平安银行"},
+        {"code": STOCK_B, "name": "招商银行"},
+    ]
+}
+FUNDS_CONFIG = {
+    "funds": [
+        {"code": FUND_CODE, "name": "红利ETF", "type": "etf", "index": "上证红利"}
+    ]
+}
+RULES_CONFIG = {
+    "stocks": {
+        "indicators": {
+            "dividend_yield": {"weight": 30, "thresholds": {"high": 4.0, "mid": 2.0}},
+            "dividend_years": {"weight": 20, "thresholds": {"high": 5, "mid": 3}},
+            "payout_ratio": {"weight": 10, "thresholds": {"min": 20, "max": 70}},
+            "pe_vs_industry": {
+                "weight": 15,
+                "thresholds": {"discount": -30, "premium": 30},
+            },
+            "pb_vs_industry": {
+                "weight": 10,
+                "thresholds": {"discount": -30, "premium": 30},
+            },
+            "ma60_position": {
+                "weight": 10,
+                "thresholds": {"sweet_low": -5, "sweet_high": 5, "max_deviation": 20},
+            },
+            "momentum_5d": {"weight": 5, "thresholds": {"oversold": -10, "overbought": 10}},
+        }
+    },
+    "funds": {
+        "indicators": {
+            "discount_rate": {"weight": 25, "thresholds": {"discount": -1, "premium": 1}},
+            "nav_trend_20d": {"weight": 25, "thresholds": {"pullback": -10, "rally": 5}},
+            "index_pe_vs_history": {"weight": 25, "thresholds": {"low": 30, "high": 70}},
+            "dividend_frequency": {"weight": 15, "thresholds": {"high": 2, "mid": 1}},
+            "fund_size": {"weight": 10, "thresholds": {"min": 1}},
+        }
+    },
+    "data": {"kline_days": 120, "pe_cache_days": 7},
+    "output": {"buy_top_n": 5, "avoid_bottom_n": 5},
+}
 
 # 全部数据接口的默认替身：返回 None（获取失败）
 DATA_FUNCTIONS = (
@@ -33,6 +80,23 @@ DATA_FUNCTIONS = (
     "resolve_index_symbol",
     "get_index_pe_history",
 )
+
+
+@pytest.fixture
+def config_dir(tmp_path):
+    """把自选列表与规则写入临时配置目录，并返回该目录。"""
+    directory = tmp_path / "config"
+    directory.mkdir()
+    for filename, payload in (
+        ("stocks.yaml", STOCKS_CONFIG),
+        ("funds.yaml", FUNDS_CONFIG),
+        ("rules.yaml", RULES_CONFIG),
+    ):
+        (directory / filename).write_text(
+            yaml.safe_dump(payload, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+    return directory
 
 
 def _kline(closes):
@@ -150,10 +214,12 @@ def _row_for(report, text):
     return matches[0]
 
 
-def test_run_happy_path_reports_all_instruments_sorted_by_total(monkeypatch, tmp_path):
+def test_run_happy_path_reports_all_instruments_sorted_by_total(
+    monkeypatch, config_dir, tmp_path
+):
     _patch_data(monkeypatch, **_happy_overrides())
 
-    report = main.run(config_dir=CONFIG_DIR, cache_dir=tmp_path, as_of=AS_OF)
+    report = main.run(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
 
     stock_rows = _section_rows(report, "【股票】")
     assert len(stock_rows) == 2
@@ -168,11 +234,13 @@ def test_run_happy_path_reports_all_instruments_sorted_by_total(monkeypatch, tmp
     assert "扫描 3 只标的（股票 2 / 基金 1），数据不足 0" in report
 
 
-def test_run_stock_missing_from_spot_table_still_scored(monkeypatch, tmp_path):
+def test_run_stock_missing_from_spot_table_still_scored(
+    monkeypatch, config_dir, tmp_path
+):
     spot = SPOT[SPOT["code"] != STOCK_A].reset_index(drop=True)
     _patch_data(monkeypatch, **_happy_overrides(get_stock_spot=lambda: spot))
 
-    report = main.run(config_dir=CONFIG_DIR, cache_dir=tmp_path, as_of=AS_OF)
+    report = main.run(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
 
     row = _row_for(report, "平安银行")
     # 价格缺失 → 股息率/派息率/PE/PB/均线位置不可评分；分红年数(1.0)与 5 日动量(0.5) 仍打分：
@@ -182,7 +250,9 @@ def test_run_stock_missing_from_spot_table_still_scored(monkeypatch, tmp_path):
     assert "招商银行" in report  # 其他标的照常
 
 
-def test_run_kline_failure_keeps_other_indicators_scoring(monkeypatch, tmp_path):
+def test_run_kline_failure_keeps_other_indicators_scoring(
+    monkeypatch, config_dir, tmp_path
+):
     def failing_kline(code, days=120, as_of=None):
         if code == STOCK_B:
             raise ConnectionError("模拟行情接口失败")
@@ -190,7 +260,7 @@ def test_run_kline_failure_keeps_other_indicators_scoring(monkeypatch, tmp_path)
 
     _patch_data(monkeypatch, **_happy_overrides(get_kline=failing_kline))
 
-    report = main.run(config_dir=CONFIG_DIR, cache_dir=tmp_path, as_of=AS_OF)
+    report = main.run(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
 
     row = _row_for(report, "招商银行")
     # K 线缺失 → 均线/动量/技术面不可评分；分红与估值类仍打分：
@@ -200,10 +270,12 @@ def test_run_kline_failure_keeps_other_indicators_scoring(monkeypatch, tmp_path)
     assert "平安银行" in report and "红利ETF" in report  # 其余标的不受影响
 
 
-def test_run_all_sources_failing_reports_insufficient_data(monkeypatch, tmp_path):
+def test_run_all_sources_failing_reports_insufficient_data(
+    monkeypatch, config_dir, tmp_path
+):
     _patch_data(monkeypatch)  # 所有数据源返回 None
 
-    report = main.run(config_dir=CONFIG_DIR, cache_dir=tmp_path, as_of=AS_OF)
+    report = main.run(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
 
     for name in ("平安银行", "招商银行", "红利ETF"):
         row = _row_for(report, name)
@@ -211,7 +283,7 @@ def test_run_all_sources_failing_reports_insufficient_data(monkeypatch, tmp_path
     assert "数据不足 3" in report
 
 
-def test_run_passes_data_rules_and_as_of_through(monkeypatch, tmp_path):
+def test_run_passes_data_rules_and_as_of_through(monkeypatch, config_dir, tmp_path):
     calls = {"kline": [], "industry": [], "nav": [], "quotes": [], "symbol": []}
 
     def get_kline(code, days=120, as_of=None):
@@ -245,7 +317,7 @@ def test_run_passes_data_rules_and_as_of_through(monkeypatch, tmp_path):
         ),
     )
 
-    main.run(config_dir=CONFIG_DIR, cache_dir=tmp_path, as_of=AS_OF)
+    main.run(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
 
     assert calls["kline"] == [(STOCK_A, 120, AS_OF), (STOCK_B, 120, AS_OF)]
     assert calls["industry"] == [
