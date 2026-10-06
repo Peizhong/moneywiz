@@ -1,15 +1,14 @@
 # 红利投资筛选工具
 #
+# config/ 与 cache/ 在构建时打进镜像，运行不需要任何挂载：
 # 构建：
 #   docker build -t moneywiz .
-# 运行（挂载宿主的 config/ 与 cache/，首次先执行上面的构建）：
-#   docker run --rm \
-#     -v "$PWD/config":/app/config \
-#     -v "$PWD/cache":/app/cache \
-#     moneywiz
+# 运行：
+#   docker run --rm moneywiz
 # 容器内跑测试：
 #   docker run --rm moneywiz pytest
-# 属主不符时（非 1000 用户）可加：-u "$(id -u):$(id -g)"
+# 说明：镜像内的 cache 是构建时的快照（24 小时 TTL 到期后自动重新拉取）；
+# 容器内新增的缓存随 --rm 消失，需要持久化时自行挂载或改用 docker commit。
 FROM python:3.12-slim
 
 # 行情日期/缓存 TTL 依赖本地日期，默认按中国市场时区（可用 -e TZ=... 覆盖）
@@ -27,9 +26,10 @@ WORKDIR /app
 COPY requirements.txt requirements-dev.txt ./
 RUN pip install --no-cache-dir -r requirements.txt -r requirements-dev.txt
 
+# config/ 与 cache/ 一并打入（见 .dockerignore 的排除列表）
 COPY . .
 
-# 非 root 运行；cache/ 需可写（挂载宿主目录时注意属主，见文件头注释）
+# 非 root 运行；cache/ 需可写（镜像内快照由构建时的内容提供）
 RUN useradd --create-home --uid 1000 app \
     && mkdir -p /app/cache \
     && chown -R app:app /app

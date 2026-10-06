@@ -89,17 +89,15 @@ funds:
 
 ```bash
 docker build -t moneywiz .
-docker run --rm \
-  -v "$PWD/config":/app/config \
-  -v "$PWD/cache":/app/cache \
-  moneywiz
+docker run --rm moneywiz           # 直接运行筛选，无需任何挂载
 docker run --rm moneywiz pytest    # 容器内跑测试
 ```
 
-镜像内置一份 `config/` 作为默认值，挂载宿主 `config/` 即可用你自己的自选；挂载
-`cache/` 让缓存跨运行保留（不挂载则每次容器运行都是冷启动）。容器以非 root
-（uid 1000）运行，宿主目录属主不同时加 `-u "$(id -u):$(id -g)"`；时区默认
-`Asia/Shanghai`，可用 `-e TZ=...` 覆盖。
+构建时把本机的 `config/`（自选、规则、成分股）与 `cache/`（行情/财报缓存）
+一并打进镜像，**不需要挂载**——改了自选/规则后重新 `docker build` 即可。
+镜像内的缓存是构建时的快照：24 小时 TTL 到期后容器会自动重新拉取；容器内
+新增的缓存随 `--rm` 消失，需要跨运行保留时自行挂 `-v` 或改用 `docker commit`。
+容器以非 root（uid 1000）运行；时区默认 `Asia/Shanghai`，可用 `-e TZ=...` 覆盖。
 
 ## 输出说明
 

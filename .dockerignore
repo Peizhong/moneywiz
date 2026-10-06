@@ -1,6 +1,5 @@
-# 本地虚拟环境与缓存不进镜像
+# 本地虚拟环境不进镜像（config/ 与 cache/ 需要打进镜像，勿在此排除）
 .venv/
-cache/
 .pytest_cache/
 __pycache__/
 *.pyc
