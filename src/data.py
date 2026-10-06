@@ -69,6 +69,10 @@ _eastmoney_quotes_down = False
 EASTMONEY_BREAKER_SECONDS = 30 * 60
 _BREAKER_CACHE_KEY = "state:eastmoney_quotes_down"
 
+# 腾讯 K 线本轮不可用标记：一次失败（如 HTTP 501 限流）后跳过腾讯、直接走
+# 新浪回退，避免逐只标的重复付出重试等待；reset_quote_source_state() 时复位。
+_tencent_kline_down = False
+
 # 同类回退提示每次运行只打一行（首条含标的代码）：熔断生效后逐只标的重复
 # 「已熔断…回退…」会刷屏；reset_quote_source_state() 时清空（每次运行重置）。
 _fallback_notices_logged: set[str] = set()
@@ -84,8 +88,9 @@ def _log_fallback_once(key: str, level: int, message: str, *args) -> None:
 
 def reset_quote_source_state() -> None:
     """重置熔断标记：若缓存中存在 30 分钟内的持久化判定则沿用，否则清空。"""
-    global _eastmoney_quotes_down
+    global _eastmoney_quotes_down, _tencent_kline_down
     _eastmoney_quotes_down = _read_persisted_breaker()
+    _tencent_kline_down = False
     _fallback_notices_logged.clear()
     if _eastmoney_quotes_down:
         logger.warning("沿用 %d 分钟内的判定：东财行情不可用，直接使用回退源", EASTMONEY_BREAKER_SECONDS // 60)
@@ -321,9 +326,15 @@ def get_kline_raw(code: str, days: int = 790) -> pd.DataFrame | None:
     前复权价已扣除后来的分红，会把历史股息率系统性算低。
     结果按 ``market_cache_hours`` 缓存；失败 → None。
     """
-    return _cached(
-        f"kline_raw:{code}:{days}", lambda: _tencent_kline(code, days, adjust=None)
-    )
+    return _cached(f"kline_raw:{code}:{days}", lambda: _fetch_kline_raw(code, days))
+
+
+def _fetch_kline_raw(code: str, days: int) -> pd.DataFrame | None:
+    """不复权日线：腾讯 → 新浪回退。"""
+    frame = _tencent_kline(code, days, adjust=None)
+    if frame is None:
+        frame = _sina_kline(code, days, adjust="")
+    return frame
 
 
 def _fetch_kline(
@@ -361,7 +372,10 @@ def _fetch_kline(
         )
         raw = None
     if raw is None:
-        return _tencent_kline(code, days)
+        frame = _tencent_kline(code, days)
+        if frame is None:
+            frame = _sina_kline(code, days, adjust="qfq")
+        return frame
     if raw.empty:
         return pd.DataFrame(columns=list(KLINE_COLUMNS))
 
@@ -387,7 +401,12 @@ def _tencent_kline(
 
     ``adjust="qfq"`` 前复权（报文键 ``qfqday``）；``adjust=None`` 不复权（键 ``day``）。
     腾讯接口按条数取数（不接日期区间），故回退路径忽略 ``as_of``。
+    任一次失败即置位本轮跳过标记（如 HTTP 501 限流），后续标的直接走新浪，
+    不再逐个重试。
     """
+    global _tencent_kline_down
+    if _tencent_kline_down:
+        return None
     symbol = _tencent_symbol(code)
     if symbol is None:
         return None
@@ -401,6 +420,12 @@ def _tencent_kline(
         label="tencent fqkline" if adjust == "qfq" else "tencent kline",
     )
     if text is None:
+        _tencent_kline_down = True
+        _log_fallback_once(
+            "tencent_kline_down",
+            logging.WARNING,
+            "腾讯 K 线获取失败，本轮回退新浪（stock_zh_a_daily）",
+        )
         return None
     try:
         payload = json.loads(text)
@@ -425,6 +450,45 @@ def _tencent_kline(
         frame.sort_values("date")
         .tail(days)
         .dropna(subset=["close"])  # indicators 不允许看到 NaN 收盘价
+        .reset_index(drop=True)
+    )
+
+
+def _sina_kline(code: str, days: int, adjust: str) -> pd.DataFrame | None:
+    """新浪日线（akshare ``stock_zh_a_daily``）→ canonical K 线帧；取末尾 days 根。
+
+    ``adjust="qfq"`` 前复权，``adjust=""`` 不复权；返回全历史后截尾（新浪源
+    不接受条数参数）。成交量由"股"折为"手"，与腾讯报文口径一致；失败 → None。
+    """
+    symbol = _tencent_symbol(code)  # sh600036 前缀格式与新浪一致
+    if symbol is None:
+        return None
+    raw = _call(
+        ak.stock_zh_a_daily,
+        symbol=symbol,
+        adjust=adjust,
+        label="stock_zh_a_daily",
+    )
+    if raw is None or raw.empty:
+        return None
+    _log_fallback_once(
+        "kline_sina",
+        logging.INFO,
+        "K 线回退新浪（stock_zh_a_daily，%s）",
+        "前复权" if adjust else "不复权",
+    )
+    frame = pd.DataFrame(
+        {
+            "date": pd.to_datetime(raw["date"]),
+            "close": pd.to_numeric(raw["close"], errors="coerce").astype("float64"),
+            "volume": pd.to_numeric(raw["volume"], errors="coerce").astype("float64")
+            / 100.0,
+        }
+    )
+    return (
+        frame.sort_values("date")
+        .tail(days)
+        .dropna(subset=["close"])
         .reset_index(drop=True)
     )
 

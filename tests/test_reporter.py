@@ -517,27 +517,20 @@ def test_dividend_trend_detail_format():
     )
 
 
-def test_risk_hints_for_volatility_and_turnover():
+def test_risk_hint_for_low_turnover():
     result = _result("600036", "招商银行", 70.0, scores={"dividend_yield": 1.0})
-    result["volatility"] = 48.2
     result["turnover_wan"] = 3200.0
 
     report = render_report(
-        [result],
-        [],
-        OUTPUT_CFG,
-        1.0,
-        risk_hints={"volatility_high": 35, "turnover_low": 5000},
+        [result], [], OUTPUT_CFG, 1.0, risk_hints={"turnover_low": 5000}
     )
 
     row = _table_rows(report, STOCK_HEADER)[0]
-    assert "波动率 48%" in row
     assert "日均成交 3200万" in row
 
 
-def test_risk_hints_respect_thresholds_and_large_amount_scale():
+def test_risk_hint_respects_turnover_threshold_and_large_amount_scale():
     result = _result("600036", "招商银行", 70.0, scores={"dividend_yield": 1.0})
-    result["volatility"] = 20.0  # 低于阈值 → 不提示
     result["turnover_wan"] = 15000.0
 
     report = render_report(
@@ -545,8 +538,20 @@ def test_risk_hints_respect_thresholds_and_large_amount_scale():
     )
 
     row = _table_rows(report, STOCK_HEADER)[0]
-    assert "波动率" not in row
     assert "日均成交 1.5亿" in row  # 大额以亿显示
+
+
+def test_volatility_tiers_show_in_highlight_and_risk_columns():
+    calm = _result("600900", "长江电力", 80.0, scores={"volatility": 1.0})
+    calm["values"] = {"volatility": 13.3}
+    wild = _result("002128", "电投能源", 60.0, scores={"volatility": 0.0})
+    wild["values"] = {"volatility": 41.1}
+
+    report = render_report([calm, wild], [], OUTPUT_CFG, 1.0)
+
+    rows = _table_rows(report, STOCK_HEADER)
+    assert "波动率 13.3%" in rows[0]  # 满分档 → 亮点
+    assert "波动率 41.1%" in rows[1]  # 零分档 → 风险（不再有重复的提示行）
 
 
 def test_negative_operating_cash_flow_warning():

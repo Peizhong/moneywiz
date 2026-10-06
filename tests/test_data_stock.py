@@ -513,6 +513,92 @@ def test_get_kline_raw_failure_returns_none(monkeypatch):
     assert get_kline_raw("600036", days=790) is None
 
 
+# 新浪日线报文（akshare stock_zh_a_daily 列）：成交量单位为"股"
+SINA_KLINE = pd.DataFrame(
+    {
+        "date": pd.to_datetime(["2026-09-29", "2026-09-30"]),
+        "close": [40.51, 41.26],
+        "volume": [44934600.0, 69987100.0],
+    }
+)
+
+
+def _patch_failing_hist(monkeypatch):
+    def failing_hist(**kwargs):
+        raise ConnectionError("东财不可用")
+
+    monkeypatch.setattr(ak, "stock_zh_a_hist", failing_hist)
+
+
+def test_get_kline_falls_back_to_sina_when_tencent_fails(monkeypatch):
+    _patch_failing_hist(monkeypatch)
+    monkeypatch.setattr("src.data.requests.get", _raise_connection_error)  # 腾讯失败
+    monkeypatch.setattr(
+        ak, "stock_zh_a_daily", lambda symbol, adjust="", **kwargs: SINA_KLINE
+    )
+
+    frame = get_kline("600036", as_of=AS_OF)
+
+    assert list(frame["close"]) == pytest.approx([40.51, 41.26])
+    # 成交量由"股"折为"手"，与腾讯报文口径一致（44934600 股 → 449346 手）
+    assert list(frame["volume"]) == pytest.approx([449346.0, 699871.0])
+
+
+def test_get_kline_raw_falls_back_to_sina(monkeypatch):
+    calls = []
+
+    def fake_daily(symbol, adjust="", **kwargs):
+        calls.append((symbol, adjust))
+        return SINA_KLINE
+
+    monkeypatch.setattr(ak, "stock_zh_a_daily", fake_daily)
+    monkeypatch.setattr("src.data.requests.get", _raise_connection_error)
+
+    frame = get_kline_raw("600036", days=790)
+
+    assert list(frame["close"]) == pytest.approx([40.51, 41.26])
+    assert calls == [("sh600036", "")]  # 不复权口径
+
+
+def test_tencent_kline_skipped_for_rest_of_run_after_failure(monkeypatch):
+    attempts = []
+
+    def failing_get(url, params=None, timeout=None):
+        attempts.append(1)
+        raise ConnectionError("腾讯不可用")
+
+    _patch_failing_hist(monkeypatch)
+    monkeypatch.setattr("src.data.requests.get", failing_get)
+    monkeypatch.setattr(
+        ak, "stock_zh_a_daily", lambda symbol, adjust="", **kwargs: SINA_KLINE
+    )
+
+    assert get_kline("600036", as_of=AS_OF) is not None  # 腾讯失败一次（含重试）
+    assert get_kline("000001", as_of=AS_OF) is not None  # 第二只不再请求腾讯
+
+    assert len(attempts) == 2  # 仅首只的 1 次 + 1 次重试
+
+
+def test_reset_quote_source_state_re_enables_tencent_kline(monkeypatch):
+    attempts = []
+
+    def failing_get(url, params=None, timeout=None):
+        attempts.append(1)
+        raise ConnectionError("腾讯不可用")
+
+    _patch_failing_hist(monkeypatch)
+    monkeypatch.setattr("src.data.requests.get", failing_get)
+    monkeypatch.setattr(
+        ak, "stock_zh_a_daily", lambda symbol, adjust="", **kwargs: SINA_KLINE
+    )
+
+    get_kline("600036", as_of=AS_OF)
+    reset_quote_source_state()  # 模拟下一次运行
+    get_kline("600036", as_of=AS_OF)
+
+    assert len(attempts) == 4  # 新运行重新尝试腾讯（各 2 次）
+
+
 # ---------------------------------------------------------------------------
 # 熔断：东财失败且回退成功后，本次运行内不再请求东财行情
 # ---------------------------------------------------------------------------

@@ -441,24 +441,61 @@ def test_run_scores_dividend_yield_percentile(monkeypatch, tmp_path):
     assert "100.0" in row
 
 
-def test_run_reports_volatility_and_liquidity_hints(monkeypatch, config_dir, tmp_path):
-    def kline_for(code, days=120, as_of=None):
-        if code != STOCK_A:
-            return KLINE_A
+def test_run_scores_volatility_and_reports_liquidity_hint(monkeypatch, tmp_path):
+    rules = {
+        "stocks": {
+            "indicators": {
+                "volatility": {"weight": 100, "thresholds": {"low": 20, "mid": 30}}
+            }
+        },
+        "funds": {
+            "indicators": {
+                "discount_rate": {
+                    "weight": 100,
+                    "thresholds": {"discount": -1, "premium": 1},
+                }
+            }
+        },
+        "data": {"kline_days": 120, "pe_cache_days": 7},
+    }
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    for filename, payload in (
+        ("stocks.yaml", STOCKS_CONFIG),
+        ("funds.yaml", FUNDS_CONFIG),
+        ("rules.yaml", rules),
+        ("dividend_index.yaml", CONSTITUENTS_CONFIG),
+    ):
+        (config_dir / filename).write_text(
+            yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8"
+        )
+
+    def wild_closes():
         closes = [10.0]
-        for index in range(69):
-            closes.append(closes[-1] * (1.05 if index % 2 == 0 else 0.95))  # 高波动
-        frame = _kline(closes)
-        frame["volume"] = [50.0] * len(closes)  # 日均成交额约 5 万元（手×100×价）
+        for index in range(259):
+            closes.append(closes[-1] * (1.05 if index % 2 == 0 else 0.95))  # ±5% 交替
+        return closes
+
+    def raw_kline_for(code, days=790):
+        return pd.DataFrame(
+            {"date": pd.bdate_range("2025-10-08", periods=260), "close": wild_closes()}
+        )
+
+    def kline_for(code, days=120, as_of=None):
+        frame = _kline([10.0] * 70)
+        frame["volume"] = [50.0] * 70  # 日均成交额约 5 万元（手×100×价）
         return frame
 
-    _patch_data(monkeypatch, **_happy_overrides(get_kline=kline_for))
+    _patch_data(
+        monkeypatch,
+        **_happy_overrides(get_kline=kline_for, get_kline_raw=raw_kline_for),
+    )
 
     report = main.run(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
 
     row = _row_for(report, "平安银行")
-    assert "波动率" in row  # ±5% 交替 → 年化 ~78%，超过默认 35%
-    assert "日均成交" in row  # 远低于默认 5000 万
+    assert "波动率" in row  # ±5% 交替 → 年化 ~78%，>30 → 零分档进风险列
+    assert "日均成交" in row  # 5 万 << 默认 5000 万 → 流动性提示
 
 
 def test_run_surfaces_sustainability_warnings(monkeypatch, config_dir, tmp_path):

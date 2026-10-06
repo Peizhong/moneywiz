@@ -22,12 +22,12 @@ stocks:
     pb_vs_industry:
       weight: 10
       thresholds: { discount: -30, premium: 30 }
-    ma60_position:
-      weight: 10
-      thresholds: { sweet_low: -5, sweet_high: 5, max_deviation: 20 }
-    momentum_5d:
-      weight: 5
-      thresholds: { oversold: -10, overbought: 10 }
+    volatility:
+      weight: 15
+      thresholds: { low: 20, mid: 30 }    # 年化波动率（%）越低越好：≤20/＜30 对应 1.0/0.5
+    # ma60_position（均线位置）与 momentum_5d（5日动量）为短线择时指标，
+    # 与"长期持有、稳定优先"的目标冲突，让位于 volatility；如需可自行加回
+
 
   # 财报红标对总分的扣减（%）：盈利下滑（按最新报告期同比，含中报/季报）/
   # 经营现金流为负 / 分红超现金流（两者按最近年报口径），封顶 30%
@@ -37,9 +37,8 @@ stocks:
     cash_cover_penalty: 10
     max_penalty: 30
 
-  # 风险列提示阈值（只标注、不影响分数）
+  # 风险列提示阈值（只标注、不影响分数）；波动率已成为打分指标，不在此提示
   risk_hints:
-    volatility_high: 35      # 年化波动率 ≥ 该值（%）→ 风险列提示
     turnover_low: 5000       # 近 60 日均成交额 < 该值（万元）→ 风险列提示
 
 # 基金评分指标权重与阈值（权重总和 100）

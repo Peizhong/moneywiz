@@ -18,6 +18,10 @@ from src import config, constituents, data, indicators, reporter, scorer
 
 logger = logging.getLogger(__name__)
 
+# 波动率取近一年（250 根）不复权 K 线：与股息率历史分位共用同一次取数，
+# 窗口贴合"长期持有"视角（120 根偏短线，且除息噪声在 250 根上可忽略）。
+VOLATILITY_WINDOW = 250
+
 
 def _fetch(fetch, label: str):
     """调用一个数据获取函数：异常或返回 None 都记 warning 并降级为 None。"""
@@ -51,7 +55,6 @@ def _result(
     tech,
     position=None,
     sustainability=None,
-    volatility=None,
     turnover_wan=None,
 ):
     """按 reporter 契约组装单只标的的 result dict。
@@ -72,7 +75,6 @@ def _result(
         "tech": tech,
         "position": position,
         "sustainability": sustainability,
-        "volatility": volatility,
         "turnover_wan": turnover_wan,
     }
 
@@ -147,6 +149,11 @@ def _stock_result(
         "pb_vs_industry": _num(indicators.calc_pb_vs_industry(pb, industry_pb)),
         "ma60_position": _num(indicators.calc_ma60_position(price, ma60)),
         "momentum_5d": _num(indicators.calc_momentum_5d(kline)),
+        "volatility": _num(
+            indicators.calc_volatility(
+                raw_kline.tail(VOLATILITY_WINDOW) if raw_kline is not None else None
+            )
+        ),
     }
     tech = {
         "macd": macd["signal"] if macd else None,
@@ -162,7 +169,6 @@ def _stock_result(
         sustainability=_sustainability(
             stock.code, dividends, as_of, cache_dir, financial_cache_days
         ),
-        volatility=_num(indicators.calc_volatility(kline)),
         turnover_wan=_num(indicators.calc_turnover_amount(kline)),
     )
 

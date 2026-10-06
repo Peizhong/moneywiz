@@ -24,6 +24,7 @@ INDICATOR_LABELS: dict[str, str] = {
     "pb_vs_industry": "PB估值",
     "ma60_position": "均线位置",
     "momentum_5d": "5日动量",
+    "volatility": "波动率",
     "discount_rate": "折溢价",
     "nav_trend_20d": "净值趋势",
     "index_pe_vs_history": "指数估值",
@@ -42,6 +43,7 @@ INDICATOR_VALUE_FORMATS: dict[str, str] = {
     "pb_vs_industry": "{:+.0f}%",
     "ma60_position": "{:+.1f}%",
     "momentum_5d": "{:+.1f}%",
+    "volatility": "{:.1f}%",
     "discount_rate": "{:+.2f}%",
     "nav_trend_20d": "{:+.1f}%",
     "index_pe_vs_history": "{:.0f}%",
@@ -54,8 +56,7 @@ POSITION_LOW = 30.0
 POSITION_HIGH = 70.0
 
 # 风险提示默认阈值（rules.yaml 的 stocks.risk_hints 可覆盖）
-VOLATILITY_HIGH_DEFAULT = 35.0  # 年化波动率 ≥ 该值（%）→ 提示
-TURNOVER_LOW_DEFAULT = 5000.0  # 近 60 日均成交额 < 该值（万元）→ 提示
+TURNOVER_LOW_DEFAULT = 5000.0  # 近 60 日均成交额 < 该值（万元）→ 风险列提示
 
 STOCK_HEADER = "【股票】"
 FUND_HEADER = "【基金】"
@@ -307,14 +308,14 @@ def _risk_text(
 
 
 def _risk_hint_phrases(item: dict, risk_hints: dict | None) -> list[str]:
-    """波动率/流动性提示（只标注，不影响分数）：超阈值才出现。"""
+    """流动性提示（只标注，不影响分数）：成交额低于阈值才出现。
+
+    波动率自成为打分指标后不再在此提示——0.0 档会经零分档展示进风险列，
+    避免同一列出现两个口径的波动率数字。
+    """
     hints = risk_hints or {}
-    volatility_high = float(hints.get("volatility_high", VOLATILITY_HIGH_DEFAULT))
     turnover_low = float(hints.get("turnover_low", TURNOVER_LOW_DEFAULT))
     phrases = []
-    volatility = item.get("volatility")
-    if volatility is not None and float(volatility) >= volatility_high:
-        phrases.append(f"波动率 {float(volatility):.0f}%")
     turnover = item.get("turnover_wan")
     if turnover is not None and float(turnover) < turnover_low:
         phrases.append(f"日均成交 {_amount_text(float(turnover))}")
