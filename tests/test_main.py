@@ -403,6 +403,36 @@ def test_run_spot_table_failure_warns_once_not_per_stock(
     assert "不在行情表中" not in caplog.text  # 不逐股重复
 
 
+def test_run_configures_cache_before_reset(monkeypatch, config_dir, tmp_path):
+    """顺序：configure_cache 必须在 reset_quote_source_state 之前（才能读到判定）。"""
+    order = []
+    monkeypatch.setattr(
+        data,
+        "configure_cache",
+        lambda cache_dir, ttl_hours=24: order.append("configure"),
+    )
+    monkeypatch.setattr(data, "reset_quote_source_state", lambda: order.append("reset"))
+    _patch_data(monkeypatch, **_happy_overrides())
+
+    main.run(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
+
+    assert order[:2] == ["configure", "reset"]
+
+
+def test_run_configures_market_cache(monkeypatch, config_dir, tmp_path):
+    calls = []
+    monkeypatch.setattr(
+        data,
+        "configure_cache",
+        lambda cache_dir, ttl_hours=24: calls.append((cache_dir, ttl_hours)),
+    )
+    _patch_data(monkeypatch, **_happy_overrides())
+
+    main.run(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
+
+    assert calls == [(tmp_path, 24)]  # 按 rules.yaml 的 market_cache_hours 启用
+
+
 def test_run_resets_quote_source_state(monkeypatch, config_dir, tmp_path):
     """每轮 run() 开始重置东财熔断，下一轮重新尝试东财主源。"""
     _patch_data(monkeypatch, **_happy_overrides())

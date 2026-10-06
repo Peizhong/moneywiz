@@ -48,6 +48,7 @@ data:
   pe_cache_days: 7
   financial_cache_days: 30   # 年报可持续性数据的缓存天数（季度更新）
   index_refresh_days: 14     # 成分股（dividend_index.yaml）超过该天数自动刷新
+  market_cache_hours: 24     # 行情/分红/净值类取数的通用缓存时长（小时），期内不再请求上游
 
 # 输出参数
 output:

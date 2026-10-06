@@ -18,6 +18,7 @@ DEFAULT_DATA: dict[str, int] = {
     "pe_cache_days": 7,
     "financial_cache_days": 30,
     "index_refresh_days": 14,
+    "market_cache_hours": 24,
 }
 DEFAULT_OUTPUT: dict[str, int] = {"buy_top_n": 5, "avoid_bottom_n": 5}
 

@@ -291,8 +291,11 @@ def run(
 ) -> str:
     """跑一遍筛选并返回完整报告文本（含摘要行）。"""
     started = time.monotonic()
-    data.reset_quote_source_state()  # 每轮运行重新尝试东财主源
     cfg = config.load_config(config_dir)
+    data.configure_cache(
+        cache_dir, ttl_hours=cfg.rules["data"]["market_cache_hours"]
+    )
+    data.reset_quote_source_state()  # 读取（可能持久化的）东财熔断判定
     as_of = as_of or date.today()
     kline_days = cfg.rules["data"]["kline_days"]
     pe_cache_days = cfg.rules["data"]["pe_cache_days"]

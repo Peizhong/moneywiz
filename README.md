@@ -65,7 +65,8 @@ funds:
 - `data`：`kline_days`（K 线/净值窗口天数，默认 120）、`pe_cache_days`
   （行业 PE/PB 缓存有效期，默认 7 天）、`financial_cache_days`（年报可持续性数据
   缓存天数，默认 30 天，财报季度更新）、`index_refresh_days`（成分股自动刷新
-  阈值，默认 14 天）；
+  阈值，默认 14 天）、`market_cache_hours`（行情/分红/净值类取数的通用缓存时长，
+  默认 24 小时——期内重复运行不再请求上游）；
 - `output`：`buy_top_n`（前 N 名标「买入」）、`avoid_bottom_n`（末尾 N 名标「末位」）。
 
 ## 运行
@@ -76,7 +77,12 @@ funds:
 
 在项目根目录执行；配置与缓存分别读写 `config/` 与 `cache/`（行业 PE/PB 缓存
 `cache/pe_cache.json`，过期为 `pe_cache_days` 天；年报可持续性缓存
-`cache/financial_cache.json`，过期为 `financial_cache_days` 天）。配置错误时打印错误并返回退出码 1，
+`cache/financial_cache.json`，过期为 `financial_cache_days` 天；行情/分红/净值等
+取数统一缓存在 `cache/market_cache.db`（SQLite），过期为 `market_cache_hours`
+小时——24 小时内重复运行不再请求上游接口）。东财行情（push2 系列）调用失败会
+熔断 30 分钟并持久化在同一个缓存库：期间直接使用腾讯回退源或按数据不足处理，
+避免每次运行都为被拒的接口重复等待；运行间隔内的第二次运行通常只需 1-2 秒。
+配置错误时打印错误并返回退出码 1，
 正常结束返回 0。
 
 ## 输出说明

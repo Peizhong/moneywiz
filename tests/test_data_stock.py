@@ -11,6 +11,8 @@ import akshare as ak
 import pandas as pd
 import pytest
 
+from src import data
+from src.cache import Cache
 from src.data import (
     get_dividend_history,
     get_financial_health,
@@ -403,6 +405,83 @@ def test_kline_both_sources_fail_returns_none(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# 通用 24 小时取数缓存（configure_cache）
+# ---------------------------------------------------------------------------
+
+
+def test_kline_cache_hit_skips_upstream(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_hist(**kwargs):
+        calls.append(1)
+        return _kline_frame([("2026-09-30", 40.0)])
+
+    monkeypatch.setattr(ak, "stock_zh_a_hist", fake_hist)
+    data.configure_cache(tmp_path, ttl_hours=24)
+
+    first = get_kline("600036", as_of=AS_OF)
+    second = get_kline("600036", as_of=AS_OF)
+
+    assert len(calls) == 1  # 第二次命中缓存
+    assert first.equals(second)
+
+
+def test_cache_disabled_by_default_refetches(monkeypatch):
+    calls = []
+
+    def fake_hist(**kwargs):
+        calls.append(1)
+        return _kline_frame([("2026-09-30", 40.0)])
+
+    monkeypatch.setattr(ak, "stock_zh_a_hist", fake_hist)
+
+    get_kline("600036", as_of=AS_OF)
+    get_kline("600036", as_of=AS_OF)
+
+    assert len(calls) == 2  # 未启用缓存 → 每次都请求
+
+
+def test_failure_results_are_not_cached(monkeypatch, tmp_path):
+    attempts = []
+
+    def failing(**kwargs):
+        attempts.append(1)
+        raise ConnectionError("东财不可用")
+
+    monkeypatch.setattr(ak, "stock_zh_a_hist", failing)
+    monkeypatch.setattr("src.data.requests.get", _raise_connection_error)
+    data.configure_cache(tmp_path, ttl_hours=24)
+
+    assert get_kline("600036", as_of=AS_OF) is None
+    assert get_kline("600036", as_of=AS_OF) is None
+    # 第一次调用失败后熔断生效，第二次直接跳过（attempts 不再增长）
+    assert len(attempts) == 2
+    # 但失败结果本身没有被当作"数据"缓存：该键不存在
+    assert (
+        Cache(tmp_path / "market_cache.db").get(
+            f"kline:600036:120:{AS_OF.isoformat()}", ttl_seconds=24 * 3600
+        )
+        is None
+    )
+
+
+def test_expired_ttl_refetches(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_hist(**kwargs):
+        calls.append(1)
+        return _kline_frame([("2026-09-30", 40.0)])
+
+    monkeypatch.setattr(ak, "stock_zh_a_hist", fake_hist)
+    data.configure_cache(tmp_path, ttl_hours=0)  # 立即过期
+
+    get_kline("600036", as_of=AS_OF)
+    get_kline("600036", as_of=AS_OF)
+
+    assert len(calls) == 2
+
+
+# ---------------------------------------------------------------------------
 # 熔断：东财失败且回退成功后，本次运行内不再请求东财行情
 # ---------------------------------------------------------------------------
 
@@ -425,7 +504,7 @@ def test_kline_after_successful_fallback_skips_eastmoney_for_rest_of_run(
 
     assert first is not None and second is not None
     assert len(attempts) == 2  # 仅第一只走了东财（含 1 次重试），第二只直接腾讯
-    assert "本次运行已判定不可用" in caplog.text
+    assert "已熔断" in caplog.text
 
 
 def test_spot_after_successful_fallback_uses_tencent_directly(monkeypatch):
@@ -445,7 +524,7 @@ def test_spot_after_successful_fallback_uses_tencent_directly(monkeypatch):
     assert out is not None and out.iloc[0]["code"] == "000001"
 
 
-def test_failed_fallback_does_not_trip_the_breaker(monkeypatch):
+def test_eastmoney_failure_trips_breaker_even_without_fallback(monkeypatch):
     attempts = []
 
     def failing_hist(**kwargs):
@@ -457,7 +536,7 @@ def test_failed_fallback_does_not_trip_the_breaker(monkeypatch):
 
     assert get_kline("600036", as_of=AS_OF) is None
     assert get_kline("000001", as_of=AS_OF) is None
-    assert len(attempts) == 4  # 回退也失败 → 不熔断，每只都仍先试东财
+    assert len(attempts) == 2  # 东财失败即熔断：第二只不再重试东财
 
 
 # ---------------------------------------------------------------------------
@@ -574,6 +653,50 @@ def test_financial_health_corrupt_cache_rebuilds(monkeypatch, tmp_path):
     )
 
     assert get_financial_health("600015", tmp_path) is not None
+
+
+def test_breaker_persists_across_runs_when_cache_enabled(monkeypatch, tmp_path):
+    """首次运行触发熔断后，下一次运行（reset 重读持久化判定）不再重试东财。"""
+    attempts = []
+
+    def failing_hist(**kwargs):
+        attempts.append(1)
+        raise ConnectionError("东财不可用")
+
+    monkeypatch.setattr(ak, "stock_zh_a_hist", failing_hist)
+    _patch_http(monkeypatch, {"fqkline": KLINE_JSON.encode("utf-8")})
+    data.configure_cache(tmp_path, ttl_hours=24)
+
+    get_kline("600036", as_of=AS_OF)  # 第一次运行：东财失败 → 腾讯成功 → 熔断并持久化
+    assert len(attempts) == 2
+
+    reset_quote_source_state()  # 模拟下一次运行开始
+    assert get_kline("600036", as_of=AS_OF) is not None
+    assert len(attempts) == 2  # 直接沿用判定，未再请求东财
+
+
+def test_stale_persisted_breaker_is_ignored(monkeypatch, tmp_path):
+    """超过 30 分钟的持久化判定失效，重新尝试东财。"""
+    attempts = []
+
+    def failing_hist(**kwargs):
+        attempts.append(1)
+        raise ConnectionError("东财不可用")
+
+    monkeypatch.setattr(ak, "stock_zh_a_hist", failing_hist)
+    _patch_http(monkeypatch, {"fqkline": KLINE_JSON.encode("utf-8")})
+    data.configure_cache(tmp_path, ttl_hours=24)
+    # 直接写入一条 31 分钟前的过期判定
+    Cache(tmp_path / "market_cache.db").set(
+        "state:eastmoney_quotes_down",
+        {"at": "old"},
+        now=datetime.now() - timedelta(minutes=31),
+    )
+
+    reset_quote_source_state()
+    get_kline("600036", as_of=AS_OF)
+
+    assert len(attempts) == 2  # 判定已过期 → 仍然先试东财（失败后回退）
 
 
 def test_reset_quote_source_state_retries_eastmoney(monkeypatch):

@@ -40,6 +40,8 @@ import akshare as ak
 import pandas as pd
 import requests
 
+from src.cache import DEFAULT_TTL_SECONDS, Cache
+
 logger = logging.getLogger(__name__)
 
 SPOT_COLUMNS = ("code", "name", "price", "pe", "pb")
@@ -57,15 +59,29 @@ INDEX_PE_COLUMNS = ("date", "pe")
 TENCENT_QUOTE_URL = "https://qt.gtimg.cn/q="
 TENCENT_KLINE_URL = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
 
-# 东财行情熔断标记：某次东财行情失败且回退源成功 → 本次运行内不再请求东财行情
-# （main.run() 开始时经 reset_quote_source_state() 重置，下一轮重新尝试）
+# 东财行情熔断标记：行情集群（push2 系列：个股行情/K线/行业/基金行情）任一调用
+# 失败（重试后仍失败）→ 判定不可用：本次运行内不再请求东财行情、直接走回退源或
+# 按数据不足处理。启用取数缓存时该判定持久化 BREAKER_SECONDS（30 分钟），后续
+# 运行直接沿用——东财恢复前不重复付出每只标的的重试等待。
+# main.run() 开始时经 reset_quote_source_state() 重新读取持久化判定。
 _eastmoney_quotes_down = False
+EASTMONEY_BREAKER_SECONDS = 30 * 60
+_BREAKER_CACHE_KEY = "state:eastmoney_quotes_down"
 
 
 def reset_quote_source_state() -> None:
-    """重置「东财行情不可用」熔断标记（每次 run() 开始时调用）。"""
+    """重置熔断标记：若缓存中存在 30 分钟内的持久化判定则沿用，否则清空。"""
     global _eastmoney_quotes_down
-    _eastmoney_quotes_down = False
+    _eastmoney_quotes_down = _read_persisted_breaker()
+    if _eastmoney_quotes_down:
+        logger.warning("沿用 %d 分钟内的判定：东财行情不可用，直接使用回退源", EASTMONEY_BREAKER_SECONDS // 60)
+
+
+def _read_persisted_breaker() -> bool:
+    cache = _market_cache
+    if cache is None:
+        return False
+    return cache.get(_BREAKER_CACHE_KEY, EASTMONEY_BREAKER_SECONDS) is not None
 
 
 def _eastmoney_quotes_available() -> bool:
@@ -73,13 +89,16 @@ def _eastmoney_quotes_available() -> bool:
 
 
 def _mark_eastmoney_quotes_down() -> None:
-    """置位熔断标记；仅首次置位时记录 warning，避免刷屏。"""
+    """置位熔断标记（并持久化到缓存，若已启用）；仅首次置位时记录 warning。"""
     global _eastmoney_quotes_down
     if not _eastmoney_quotes_down:
         _eastmoney_quotes_down = True
         logger.warning(
-            "东财行情本次运行已判定不可用（已有成功回退），后续请求直接使用回退源"
+            "东财行情调用失败，已熔断 %d 分钟：期间直接使用回退源或按数据不足处理",
+            EASTMONEY_BREAKER_SECONDS // 60,
         )
+        if _market_cache is not None:
+            _market_cache.set(_BREAKER_CACHE_KEY, {"at": datetime.now().isoformat()})
 
 # stock_index_pe_lg 接受的指数名（"中证红利" 等不在其列，见 resolve_index_symbol）
 SUPPORTED_INDEX_PE = {
@@ -96,6 +115,36 @@ SUPPORTED_INDEX_PE = {
     "中证100",
     "中证800",
 }
+
+
+# 通用取数缓存（默认 24 小时）：main.run 开始时经 configure_cache 启用，
+# 测试与不传 cache_dir 的场景保持关闭（None）。
+_market_cache: "Cache | None" = None
+_market_cache_ttl_seconds = DEFAULT_TTL_SECONDS
+
+
+def configure_cache(cache_dir, ttl_hours: float = 24) -> None:
+    """启用取数缓存（cache_dir/market_cache.db）；cache_dir 传 None 时关闭。"""
+    global _market_cache, _market_cache_ttl_seconds
+    if cache_dir is None:
+        _market_cache = None
+        return
+    _market_cache_ttl_seconds = int(ttl_hours * 3600)
+    _market_cache = Cache(Path(cache_dir) / "market_cache.db")
+
+
+def _cached(key: str, fetch):
+    """命中缓存直接返回；否则调用 fetch，成功（非 None）时写入缓存。"""
+    cache = _market_cache
+    if cache is None:
+        return fetch()
+    hit = cache.get(key, _market_cache_ttl_seconds)
+    if hit is not None:
+        return hit
+    value = fetch()
+    if value is not None:
+        cache.set(key, value)
+    return value
 
 
 def _call(fn, *args, label=None, **kwargs):
@@ -144,6 +193,17 @@ def _num_or_none(value) -> float | None:
 
 
 def get_stock_spot(codes) -> pd.DataFrame | None:
+    """自选 A 股实时行情（东财主源 → 腾讯回退），归一为 ``code, name, price, pe, pb``。
+
+    结果按 ``market_cache_hours``（默认 24 小时）缓存，键为自选代码集合。
+    """
+    codes = list(codes)
+    return _cached(
+        f"spot:{','.join(sorted(codes))}", lambda: _fetch_stock_spot(codes)
+    )
+
+
+def _fetch_stock_spot(codes) -> pd.DataFrame | None:
     """自选 A 股实时行情，归一为 ``code, name, price, pe, pb`` 并只保留 codes。
 
     主源东财 ``stock_zh_a_spot_em`` 全市场表（push2 对海外 IP 拒绝服务）；
@@ -153,6 +213,8 @@ def get_stock_spot(codes) -> pd.DataFrame | None:
     codes = list(codes)
     if _eastmoney_quotes_available():
         raw = _call(ak.stock_zh_a_spot_em)
+        if raw is None:
+            _mark_eastmoney_quotes_down()  # 行情集群失败即熔断（30 分钟内不重复重试）
     else:
         logger.info("东财行情已熔断，get_stock_spot 直接使用腾讯行情")
         raw = None
@@ -161,7 +223,6 @@ def get_stock_spot(codes) -> pd.DataFrame | None:
         frame = _tencent_spot(codes)
         if frame is None:
             return None
-        _mark_eastmoney_quotes_down()
     else:
         if raw.empty:
             return pd.DataFrame(columns=list(SPOT_COLUMNS))
@@ -213,6 +274,17 @@ def _tencent_spot(codes: list[str]) -> pd.DataFrame | None:
 def get_kline(
     code: str, days: int = 120, as_of: date | None = None
 ) -> pd.DataFrame | None:
+    """单只日 K 线（前复权，东财主源 → 腾讯回退），归一为 ``date, close``。
+
+    结果按 ``market_cache_hours``（默认 24 小时）缓存（显式 ``as_of`` 单独成键）。
+    """
+    key = f"kline:{code}:{days}:{as_of.isoformat() if as_of else 'live'}"
+    return _cached(key, lambda: _fetch_kline(code, days, as_of))
+
+
+def _fetch_kline(
+    code: str, days: int = 120, as_of: date | None = None
+) -> pd.DataFrame | None:
     """单只日 K 线（前复权），归一为 ``date, close``；失败 → None。
 
     请求区间为 ``as_of - 2×days`` 自然日至 ``as_of``（默认今天），
@@ -228,15 +300,14 @@ def get_kline(
             end_date=as_of.strftime("%Y%m%d"),
             adjust="qfq",
         )
+        if raw is None:
+            _mark_eastmoney_quotes_down()  # 行情集群失败即熔断（30 分钟内不重复重试）
     else:
         logger.info("东财行情已熔断，get_kline(%s) 直接使用腾讯行情", code)
         raw = None
     if raw is None:
         logger.warning("get_kline(%s) 东财行情不可用，回退腾讯行情", code)
-        fallback = _tencent_kline(code, days)
-        if fallback is not None:
-            _mark_eastmoney_quotes_down()
-        return fallback
+        return _tencent_kline(code, days)
     if raw.empty:
         return pd.DataFrame(columns=list(KLINE_COLUMNS))
 
@@ -292,6 +363,14 @@ def _tencent_kline(code: str, days: int) -> pd.DataFrame | None:
 
 
 def get_dividend_history(code: str) -> pd.DataFrame | None:
+    """单只个股实施完毕的分红明细，归一为 ``date, dividend_per_share``。
+
+    结果按 ``market_cache_hours``（默认 24 小时）缓存。
+    """
+    return _cached(f"dividend:{code}", lambda: _fetch_dividend_history(code))
+
+
+def _fetch_dividend_history(code: str) -> pd.DataFrame | None:
     """单只股票分红明细，归一为 ``date, dividend_per_share``；失败 → None。
 
     仅保留 ``进度 == "实施"`` 且除权除息日非空的记录（预案/未实施剔除），
@@ -348,6 +427,8 @@ def get_industry_pe_pb(
             logger.info("东财行情已熔断，get_industry_pe_pb(%s) 按数据不足处理", code)
             return None
         raw = _call(ak.stock_individual_info_em, symbol=code)
+        if raw is None:
+            _mark_eastmoney_quotes_down()  # 行情集群失败即熔断（30 分钟内不重复重试）
         industry = _industry_from_info(raw)
         if industry is None:
             return None
@@ -360,6 +441,7 @@ def get_industry_pe_pb(
             return None
         cons = _call(ak.stock_board_industry_cons_em, symbol=industry)
         if cons is None:
+            _mark_eastmoney_quotes_down()  # 行情集群失败即熔断（30 分钟内不重复重试）
             return None
         medians = {
             "pe": _positive_median(cons, "市盈率-动态"),
@@ -466,6 +548,14 @@ _FUND_HIST_FUNCTIONS = {"etf": "fund_etf_hist_em", "lof": "fund_lof_hist_em"}
 
 
 def get_fund_quotes(fund_type: str) -> pd.DataFrame | None:
+    """ETF/LOF 实时行情，归一为 ``code, name, price, iopv``。
+
+    结果按 ``market_cache_hours``（默认 24 小时）缓存。
+    """
+    return _cached(f"fund_quotes:{fund_type}", lambda: _fetch_fund_quotes(fund_type))
+
+
+def _fetch_fund_quotes(fund_type: str) -> pd.DataFrame | None:
     """ETF/LOF 实时行情，归一为 ``code, name, price, iopv``；失败 → None。
 
     ``etf`` 源 ``fund_etf_spot_em``、``lof`` 源 ``fund_lof_spot_em``（上游无
@@ -479,6 +569,7 @@ def get_fund_quotes(fund_type: str) -> pd.DataFrame | None:
         return None
     raw = _call(getattr(ak, ak_name))
     if raw is None:
+        _mark_eastmoney_quotes_down()  # 行情集群失败即熔断（30 分钟内不重复重试）
         return None
     if raw.empty:
         return pd.DataFrame(columns=list(FUND_QUOTE_COLUMNS))
@@ -498,6 +589,19 @@ def get_fund_quotes(fund_type: str) -> pd.DataFrame | None:
 
 
 def get_fund_nav_history(
+    code: str, fund_type: str, days: int = 120
+) -> pd.DataFrame | None:
+    """单只基金日净值，归一为 ``date, close``。
+
+    结果按 ``market_cache_hours``（默认 24 小时）缓存。
+    """
+    return _cached(
+        f"fund_nav:{code}:{fund_type}:{days}",
+        lambda: _fetch_fund_nav_history(code, fund_type, days),
+    )
+
+
+def _fetch_fund_nav_history(
     code: str, fund_type: str, days: int = 120
 ) -> pd.DataFrame | None:
     """单只基金日净值，归一为 ``date, close``；失败 → None。
@@ -524,6 +628,8 @@ def get_fund_nav_history(
                 end_date=as_of.strftime("%Y%m%d"),
                 adjust="",
             )
+            if raw is None:
+                _mark_eastmoney_quotes_down()  # 行情集群失败即熔断
         else:
             logger.info(
                 "东财行情已熔断，get_fund_nav_history(%s) 直接使用单位净值走势", code
@@ -541,8 +647,6 @@ def get_fund_nav_history(
                 ak.fund_open_fund_info_em, symbol=code, indicator="单位净值走势"
             )
             date_column, close_column = "净值日期", "单位净值"
-            if raw is not None:
-                _mark_eastmoney_quotes_down()
     if raw is None:
         return None
     if raw.empty:
@@ -563,6 +667,11 @@ def get_fund_nav_history(
 
 
 def get_fund_latest_nav(code: str) -> float | None:
+    """最新单位净值（``单位净值走势`` 末行）；结果按 24 小时缓存。"""
+    return _cached(f"fund_latest_nav:{code}", lambda: _fetch_fund_latest_nav(code))
+
+
+def _fetch_fund_latest_nav(code: str) -> float | None:
     """最新单位净值（``单位净值走势`` 末行）；失败或无有效值 → None。"""
     raw = _call(ak.fund_open_fund_info_em, symbol=code, indicator="单位净值走势")
     if raw is None or raw.empty:
@@ -572,6 +681,13 @@ def get_fund_latest_nav(code: str) -> float | None:
 
 
 def get_fund_dividend_history(code: str) -> pd.DataFrame | None:
+    """基金分红除息日序列，归一为 ``date`` 单列；结果按 24 小时缓存。"""
+    return _cached(
+        f"fund_dividends:{code}", lambda: _fetch_fund_dividend_history(code)
+    )
+
+
+def _fetch_fund_dividend_history(code: str) -> pd.DataFrame | None:
     """单只基金分红明细，归一为 ``date``（除息日，升序）；失败 → None。
 
     ETF/LOF/开放式基金同源于 ``fund_open_fund_info_em`` 的分红送配详情；
@@ -588,6 +704,11 @@ def get_fund_dividend_history(code: str) -> pd.DataFrame | None:
 
 
 def get_fund_overview(code: str) -> dict | None:
+    """基金概况原始串（``scale``/``tracker``）；结果按 24 小时缓存。"""
+    return _cached(f"fund_overview:{code}", lambda: _fetch_fund_overview(code))
+
+
+def _fetch_fund_overview(code: str) -> dict | None:
     """基金概况 ``{"scale": str | None, "tracker": str | None}``；失败 → None。
 
     取 ``fund_overview_em`` 首行的 ``净资产规模`` 与 ``跟踪标的`` 原始串，
@@ -657,6 +778,13 @@ def _strip_tracker_suffix(tracker: str | None) -> str | None:
 
 
 def get_index_pe_history(index_symbol: str) -> pd.DataFrame | None:
+    """乐咕乐股指数 PE 历史，归一为 ``date, pe``（滚动市盈率）；按 24 小时缓存。"""
+    return _cached(
+        f"index_pe:{index_symbol}", lambda: _fetch_index_pe_history(index_symbol)
+    )
+
+
+def _fetch_index_pe_history(index_symbol: str) -> pd.DataFrame | None:
     """乐咕乐股指数 PE 历史，归一为 ``date, pe``（滚动市盈率）；失败 → None。
 
     按日期升序并剔除滚动市盈率为 NaN 的行（calc_index_pe_position 的夹取
@@ -735,6 +863,14 @@ def get_financial_health(
 
 
 def get_index_dividend_yield(index_code: str = "000922") -> float | None:
+    """中证指数官网最新股息率（%，取 ``股息率1``）；结果按 24 小时缓存。"""
+    return _cached(
+        f"index_div_yield:{index_code}",
+        lambda: _fetch_index_dividend_yield(index_code),
+    )
+
+
+def _fetch_index_dividend_yield(index_code: str = "000922") -> float | None:
     """中证指数官网最新股息率（%，取 ``股息率1``），默认中证红利；失败 → None。
 
     返回帧为倒序（新在前）且可能含 NaN，按日期升序取最后一个有效值。
@@ -754,6 +890,11 @@ def get_index_dividend_yield(index_code: str = "000922") -> float | None:
 
 
 def get_10y_bond_yield(days: int = 90) -> float | None:
+    """中国 10 年期国债收益率最新值（%）；结果按 24 小时缓存。"""
+    return _cached(f"bond_10y:{days}", lambda: _fetch_10y_bond_yield(days))
+
+
+def _fetch_10y_bond_yield(days: int = 90) -> float | None:
     """中国 10 年期国债收益率最新值（%）；失败 → None。
 
     只请求近 ``days`` 天（bond_zh_us_rate 默认拉取 1990 年至今，全量要 19 次请求）。
