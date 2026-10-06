@@ -150,7 +150,7 @@ TTM 窗口：`date > pd.Timestamp(as_of) - pd.Timedelta(days=window_days)`。连
 
 - [ ] **Step 3: 实现**
 
-MACD：`EMA(12)-EMA(26)=DIF`，`DEA=EMA(DIF,9)`，`hist=2*(DIF-DEA)`，全部用 `pandas.ewm(span=n, adjust=False, min_periods=n).mean()`；金叉/死叉 = 最后一根的 DIF-DEA 与上一根变号。RSI：Wilder 平滑，`ewm(alpha=1/period, adjust=False)`。
+MACD：`EMA(12)-EMA(26)=DIF`（`ewm(span=n, adjust=False)`，首根播种），`DEA=EMA(DIF,9)`（`min_periods=9`），`hist=2*(DIF-DEA)`；金叉/死叉 = 最后一根的 DIF-DEA 与上一根变号；不足 26 行 → None。RSI：Wilder 平滑，`ewm(alpha=1/period, adjust=False)`。
 
 - [ ] **Step 4: 运行测试确认通过**
 
