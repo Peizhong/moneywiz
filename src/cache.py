@@ -67,9 +67,21 @@ class Cache:
         try:
             envelope = json.loads(payload)
             if envelope.get("type") == "dataframe":
-                frame = pd.read_json(io.StringIO(envelope["data"]), orient="split")
-                # read_json 会把整数值的浮点列推断为 int64；本项目的数值列
-                # （收盘价/净值/PE/分红）语义上均为 float，逐一还原 dtype。
+                # 字符串列（如 6 位代码 "000001"）必须按原 dtype 回读，否则
+                # read_json 会把数字串推断成 int（前导零丢失，按代码查行情全部失配）。
+                stored_dtypes = envelope.get("dtypes") or {}
+                string_columns = {
+                    column: str
+                    for column, name in stored_dtypes.items()
+                    if name in ("object", "string", "str")
+                }
+                frame = pd.read_json(
+                    io.StringIO(envelope["data"]),
+                    orient="split",
+                    dtype=string_columns or None,
+                )
+                # 整数值的浮点列会被推断为 int64；本项目的数值列（收盘价/净值/
+                # PE/分红/成交量）语义上均为 float，逐一还原 dtype。
                 for column in frame.columns:
                     if pd.api.types.is_numeric_dtype(
                         frame[column]
@@ -87,6 +99,7 @@ class Cache:
         if isinstance(value, pd.DataFrame):
             envelope = {
                 "type": "dataframe",
+                "dtypes": {column: str(dtype) for column, dtype in value.dtypes.items()},
                 "data": value.to_json(orient="split", date_format="iso"),
             }
         else:

@@ -44,6 +44,46 @@ def test_dataframe_roundtrip_preserves_dates_and_values(tmp_path):
     assert out["close"].tolist() == pytest.approx([40.51, 41.26])
 
 
+def test_string_code_column_keeps_leading_zeros(tmp_path):
+    cache = _cache(tmp_path)
+    frame = pd.DataFrame(
+        {
+            "code": ["000001", "600036"],
+            "name": ["平安银行", "招商银行"],
+            "price": [11.57, 41.26],
+        }
+    )
+
+    cache.set("spot", frame, now=NOW)
+    out = cache.get("spot", ttl_seconds=86400, now=NOW)
+
+    assert out.equals(frame)  # 字符串代码（含前导零）必须原样保留
+    assert out["code"].tolist() == ["000001", "600036"]
+    assert str(out["code"].dtype) in ("object", "string", "str")
+
+
+def test_old_envelope_without_dtypes_still_reads(tmp_path):
+    # 旧格式（无 dtypes 元数据）不应报错：正常读出，数值列按 float 还原
+    cache = _cache(tmp_path)
+    cache.set("warmup", 1.0, now=NOW)  # 先建表
+    with sqlite3.connect(tmp_path / "market_cache.db") as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO cache (key, payload, updated_at) VALUES (?, ?, ?)",
+            (
+                "legacy",
+                '{"type": "dataframe", "data": "{\\"columns\\":[\\"close\\"],'
+                '\\"index\\":[0],\\"data\\":[[40.0]]}"}',
+                NOW.isoformat(),
+            ),
+        )
+
+    out = cache.get("legacy", ttl_seconds=86400, now=NOW)
+
+    assert out is not None and list(out.columns) == ["close"]
+    assert out["close"].tolist() == [40.0]
+    assert out["close"].dtype == "float64"
+
+
 def test_whole_number_floats_keep_float_dtype(tmp_path):
     # read_json 会把 40.0 推断成 int64 —— 缓存层必须还原为 float64
     cache = _cache(tmp_path)
