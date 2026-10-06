@@ -560,3 +560,29 @@ def test_etf_history_falls_back_to_nav_series(monkeypatch, caplog):
     assert out["close"].tolist() == pytest.approx([1.100, 1.120, 1.130, 1.250])
     assert calls == [{"symbol": ETF_CODE, "indicator": "单位净值走势"}]
     assert "回退" in caplog.text
+
+
+def test_etf_fallback_trips_breaker_for_fund_quotes(monkeypatch):
+    """基金历史回退成功后熔断；无回退源的基金行情不再请求东财，直接数据不足。"""
+    spot_calls = []
+
+    def failing_hist(**kwargs):
+        raise ConnectionError("东财不可用")
+
+    def spot_should_be_skipped(**kwargs):
+        spot_calls.append(1)
+        raise AssertionError("熔断后不应再请求 fund_etf_spot_em")
+
+    monkeypatch.setattr(ak, "fund_etf_hist_em", failing_hist)
+    monkeypatch.setattr(ak, "fund_etf_spot_em", spot_should_be_skipped)
+    monkeypatch.setattr(
+        ak,
+        "fund_open_fund_info_em",
+        lambda symbol, indicator: _open_fund_nav_frame(),
+    )
+
+    out = get_fund_nav_history(ETF_CODE, "etf")  # 触发熔断
+
+    assert out is not None
+    assert get_fund_quotes("etf") is None
+    assert spot_calls == []  # 被跳过，未发起请求

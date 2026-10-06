@@ -198,6 +198,7 @@ def run(
 ) -> str:
     """跑一遍筛选并返回完整报告文本（含摘要行）。"""
     started = time.monotonic()
+    data.reset_quote_source_state()  # 每轮运行重新尝试东财主源
     cfg = config.load_config(config_dir)
     as_of = as_of or date.today()
     kline_days = cfg.rules["data"]["kline_days"]

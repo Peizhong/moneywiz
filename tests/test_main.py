@@ -301,6 +301,17 @@ def test_run_spot_table_failure_warns_once_not_per_stock(
     assert "不在行情表中" not in caplog.text  # 不逐股重复
 
 
+def test_run_resets_quote_source_state(monkeypatch, config_dir, tmp_path):
+    """每轮 run() 开始重置东财熔断，下一轮重新尝试东财主源。"""
+    _patch_data(monkeypatch, **_happy_overrides())
+
+    data._eastmoney_quotes_down = True  # 模拟上一轮运行遗留的熔断状态
+
+    main.run(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
+
+    assert data._eastmoney_quotes_down is False
+
+
 def test_run_passes_data_rules_and_as_of_through(monkeypatch, config_dir, tmp_path):
     calls = {"kline": [], "industry": [], "nav": [], "quotes": [], "symbol": []}
 

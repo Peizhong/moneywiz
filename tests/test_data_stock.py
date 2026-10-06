@@ -10,7 +10,12 @@ import akshare as ak
 import pandas as pd
 import pytest
 
-from src.data import get_dividend_history, get_kline, get_stock_spot
+from src.data import (
+    get_dividend_history,
+    get_kline,
+    get_stock_spot,
+    reset_quote_source_state,
+)
 
 AS_OF = date(2026, 10, 6)
 
@@ -393,3 +398,78 @@ def test_kline_both_sources_fail_returns_none(monkeypatch):
     monkeypatch.setattr("src.data.requests.get", _raise_connection_error)
 
     assert get_kline("600036", as_of=AS_OF) is None
+
+
+# ---------------------------------------------------------------------------
+# 熔断：东财失败且回退成功后，本次运行内不再请求东财行情
+# ---------------------------------------------------------------------------
+
+
+def test_kline_after_successful_fallback_skips_eastmoney_for_rest_of_run(
+    monkeypatch, caplog
+):
+    attempts = []
+
+    def failing_hist(**kwargs):
+        attempts.append(1)
+        raise ConnectionError("东财不可用")
+
+    monkeypatch.setattr(ak, "stock_zh_a_hist", failing_hist)
+    _patch_http(monkeypatch, {"fqkline": KLINE_JSON.encode("utf-8")})
+
+    with caplog.at_level(logging.WARNING):
+        first = get_kline("600036", as_of=AS_OF)
+        second = get_kline("600036", as_of=AS_OF)
+
+    assert first is not None and second is not None
+    assert len(attempts) == 2  # 仅第一只走了东财（含 1 次重试），第二只直接腾讯
+    assert "本次运行已判定不可用" in caplog.text
+
+
+def test_spot_after_successful_fallback_uses_tencent_directly(monkeypatch):
+    attempts = []
+
+    def failing_spot():
+        attempts.append(1)
+        raise ConnectionError("东财不可用")
+
+    monkeypatch.setattr(ak, "stock_zh_a_spot_em", failing_spot)
+    _patch_http(monkeypatch, {"qt.gtimg.cn": QUOTES_TEXT.encode("gbk")})
+
+    get_stock_spot(["600036"])
+    out = get_stock_spot(["000001"])
+
+    assert len(attempts) == 2  # 第二次不再尝试东财
+    assert out is not None and out.iloc[0]["code"] == "000001"
+
+
+def test_failed_fallback_does_not_trip_the_breaker(monkeypatch):
+    attempts = []
+
+    def failing_hist(**kwargs):
+        attempts.append(1)
+        raise ConnectionError("东财不可用")
+
+    monkeypatch.setattr(ak, "stock_zh_a_hist", failing_hist)
+    monkeypatch.setattr("src.data.requests.get", _raise_connection_error)
+
+    assert get_kline("600036", as_of=AS_OF) is None
+    assert get_kline("000001", as_of=AS_OF) is None
+    assert len(attempts) == 4  # 回退也失败 → 不熔断，每只都仍先试东财
+
+
+def test_reset_quote_source_state_retries_eastmoney(monkeypatch):
+    attempts = []
+
+    def failing_hist(**kwargs):
+        attempts.append(1)
+        raise ConnectionError("东财不可用")
+
+    monkeypatch.setattr(ak, "stock_zh_a_hist", failing_hist)
+    _patch_http(monkeypatch, {"fqkline": KLINE_JSON.encode("utf-8")})
+
+    get_kline("600036", as_of=AS_OF)
+    reset_quote_source_state()
+    get_kline("000001", as_of=AS_OF)
+
+    assert len(attempts) == 4  # 重置后重新尝试东财（各 2 次）

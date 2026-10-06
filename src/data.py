@@ -56,6 +56,30 @@ INDEX_PE_COLUMNS = ("date", "pe")
 TENCENT_QUOTE_URL = "https://qt.gtimg.cn/q="
 TENCENT_KLINE_URL = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
 
+# 东财行情熔断标记：某次东财行情失败且回退源成功 → 本次运行内不再请求东财行情
+# （main.run() 开始时经 reset_quote_source_state() 重置，下一轮重新尝试）
+_eastmoney_quotes_down = False
+
+
+def reset_quote_source_state() -> None:
+    """重置「东财行情不可用」熔断标记（每次 run() 开始时调用）。"""
+    global _eastmoney_quotes_down
+    _eastmoney_quotes_down = False
+
+
+def _eastmoney_quotes_available() -> bool:
+    return not _eastmoney_quotes_down
+
+
+def _mark_eastmoney_quotes_down() -> None:
+    """置位熔断标记；仅首次置位时记录 warning，避免刷屏。"""
+    global _eastmoney_quotes_down
+    if not _eastmoney_quotes_down:
+        _eastmoney_quotes_down = True
+        logger.warning(
+            "东财行情本次运行已判定不可用（已有成功回退），后续请求直接使用回退源"
+        )
+
 # stock_index_pe_lg 接受的指数名（"中证红利" 等不在其列，见 resolve_index_symbol）
 SUPPORTED_INDEX_PE = {
     "上证50",
@@ -126,12 +150,17 @@ def get_stock_spot(codes) -> pd.DataFrame | None:
     两个源都失败 → None；代码前缀无法识别时该代码不出现（也不会被请求）。
     """
     codes = list(codes)
-    raw = _call(ak.stock_zh_a_spot_em)
+    if _eastmoney_quotes_available():
+        raw = _call(ak.stock_zh_a_spot_em)
+    else:
+        logger.info("东财行情已熔断，get_stock_spot 直接使用腾讯行情")
+        raw = None
     if raw is None:
         logger.warning("get_stock_spot 东财行情不可用，回退腾讯行情")
         frame = _tencent_spot(codes)
         if frame is None:
             return None
+        _mark_eastmoney_quotes_down()
     else:
         if raw.empty:
             return pd.DataFrame(columns=list(SPOT_COLUMNS))
@@ -189,17 +218,24 @@ def get_kline(
     取最后 days 行并按日期升序，剔除收盘价为 NaN 的行。
     """
     as_of = as_of or date.today()
-    raw = _call(
-        ak.stock_zh_a_hist,
-        symbol=code,
-        period="daily",
-        start_date=(as_of - timedelta(days=2 * days)).strftime("%Y%m%d"),
-        end_date=as_of.strftime("%Y%m%d"),
-        adjust="qfq",
-    )
+    if _eastmoney_quotes_available():
+        raw = _call(
+            ak.stock_zh_a_hist,
+            symbol=code,
+            period="daily",
+            start_date=(as_of - timedelta(days=2 * days)).strftime("%Y%m%d"),
+            end_date=as_of.strftime("%Y%m%d"),
+            adjust="qfq",
+        )
+    else:
+        logger.info("东财行情已熔断，get_kline(%s) 直接使用腾讯行情", code)
+        raw = None
     if raw is None:
         logger.warning("get_kline(%s) 东财行情不可用，回退腾讯行情", code)
-        return _tencent_kline(code, days)
+        fallback = _tencent_kline(code, days)
+        if fallback is not None:
+            _mark_eastmoney_quotes_down()
+        return fallback
     if raw.empty:
         return pd.DataFrame(columns=list(KLINE_COLUMNS))
 
@@ -307,6 +343,9 @@ def get_industry_pe_pb(
 
     industry = _cached_industry(cache, code, cache_days)
     if industry is None:
+        if not _eastmoney_quotes_available():
+            logger.info("东财行情已熔断，get_industry_pe_pb(%s) 按数据不足处理", code)
+            return None
         raw = _call(ak.stock_individual_info_em, symbol=code)
         industry = _industry_from_info(raw)
         if industry is None:
@@ -315,6 +354,9 @@ def get_industry_pe_pb(
 
     medians = _cached_medians(cache, industry, cache_days)
     if medians is None:
+        if not _eastmoney_quotes_available():
+            logger.info("东财行情已熔断，get_industry_pe_pb(%s) 按数据不足处理", code)
+            return None
         cons = _call(ak.stock_board_industry_cons_em, symbol=industry)
         if cons is None:
             return None
@@ -429,6 +471,9 @@ def get_fund_quotes(fund_type: str) -> pd.DataFrame | None:
     ak_name = _FUND_SPOT_FUNCTIONS.get(fund_type)
     if ak_name is None:
         return None
+    if not _eastmoney_quotes_available():
+        logger.info("东财行情已熔断，get_fund_quotes(%s) 按数据不足处理", fund_type)
+        return None
     raw = _call(getattr(ak, ak_name))
     if raw is None:
         return None
@@ -467,14 +512,20 @@ def get_fund_nav_history(
         if ak_name is None:
             return None
         as_of = date.today()
-        raw = _call(
-            getattr(ak, ak_name),
-            symbol=code,
-            period="daily",
-            start_date=(as_of - timedelta(days=2 * days)).strftime("%Y%m%d"),
-            end_date=as_of.strftime("%Y%m%d"),
-            adjust="",
-        )
+        if _eastmoney_quotes_available():
+            raw = _call(
+                getattr(ak, ak_name),
+                symbol=code,
+                period="daily",
+                start_date=(as_of - timedelta(days=2 * days)).strftime("%Y%m%d"),
+                end_date=as_of.strftime("%Y%m%d"),
+                adjust="",
+            )
+        else:
+            logger.info(
+                "东财行情已熔断，get_fund_nav_history(%s) 直接使用单位净值走势", code
+            )
+            raw = None
         date_column, close_column = "日期", "收盘"
         if raw is None:
             # 东财历史行情不可用（海外常见）→ 回退单位净值走势（fund.eastmoney.com 可达）
@@ -487,6 +538,8 @@ def get_fund_nav_history(
                 ak.fund_open_fund_info_em, symbol=code, indicator="单位净值走势"
             )
             date_column, close_column = "净值日期", "单位净值"
+            if raw is not None:
+                _mark_eastmoney_quotes_down()
     if raw is None:
         return None
     if raw.empty:
