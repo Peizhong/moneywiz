@@ -412,14 +412,19 @@ def test_run_reports_volatility_and_liquidity_hints(monkeypatch, config_dir, tmp
 
 def test_run_surfaces_sustainability_warnings(monkeypatch, config_dir, tmp_path):
     def health(code, cache_dir, cache_days=30):
-        return {"eps_growth": -12.6, "op_cash_per_share": 0.5, "payout_stmt": 118.0}
+        return {
+            "eps_growth": -12.6,
+            "eps_period": "2026-06-30",
+            "op_cash_per_share": 0.5,
+            "payout_stmt": 118.0,
+        }
 
     _patch_data(monkeypatch, **_happy_overrides(get_financial_health=health))
 
     report = main.run(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
 
     row = _row_for(report, "平安银行")
-    assert "盈利下滑 13%" in row
+    assert "盈利下滑 13%（2026中报）" in row
     # TTM 每股分红 1.0 ÷ 每股经营现金流 0.5 = 200%
     assert "分红超现金流 200%" in row
     other = _row_for(report, "红利ETF")

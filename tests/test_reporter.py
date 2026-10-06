@@ -369,6 +369,34 @@ def test_sustainability_warnings_join_risk_column():
     assert "分红超现金流 200%" in row
 
 
+def test_sustainability_phrase_includes_report_period_label():
+    result = _result("600690", "海尔智家", 87.8, scores={"dividend_yield": 1.0})
+    result["sustainability"] = {
+        "eps_growth": -12.9,
+        "eps_period": "2026-06-30",
+        "op_cash_per_share": 2.77,
+        "cash_cover": 41.9,
+    }
+
+    row = _table_rows(render_report([result], [], OUTPUT_CFG, 1.0), STOCK_HEADER)[0]
+
+    assert "盈利下滑 13%（2026中报）" in row
+
+
+def test_sustainability_period_label_mapping():
+    from src.reporter import _sustainability_phrases
+
+    def phrase(period):
+        return _sustainability_phrases({"eps_growth": -5.0, "eps_period": period})[0]
+
+    assert phrase("2026-03-31") == "盈利下滑 5%（2026一季报）"
+    assert phrase("2026-06-30") == "盈利下滑 5%（2026中报）"
+    assert phrase("2026-09-30") == "盈利下滑 5%（2026三季报）"
+    assert phrase("2025-12-31") == "盈利下滑 5%（2025年报）"
+    assert phrase(None) == "盈利下滑 5%"  # 无报告期 → 退回旧文案
+    assert phrase("not-a-date") == "盈利下滑 5%"
+
+
 def test_dividend_trend_detail_format():
     from src.reporter import _detail_text
 

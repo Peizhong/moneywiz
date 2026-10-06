@@ -950,10 +950,17 @@ def _fetch_index_pe_history(index_symbol: str) -> pd.DataFrame | None:
 def get_financial_health(
     code: str, cache_dir, cache_days: int = 30
 ) -> dict | None:
-    """个股年报口径的可持续性指标（缓存 cache_days 天）；失败或无年报行 → None。
+    """个股财务可持续性指标（缓存 cache_days 天）；失败或无年报行 → None。
 
-    来源 ``stock_financial_analysis_indicator``（新浪，按报告期升序），取最近一个
-    12-31 年报行：``净利润增长率(%)``、``每股经营性现金流(元)``、``股息发放率(%)``。
+    来源 ``stock_financial_analysis_indicator``（新浪，按报告期升序）：
+
+    - ``eps_growth``/``eps_period``：**最新报告期**（含中报/季报，从新到旧第一个
+      数值有效的行）的 ``净利润增长率(%)`` 及其报告期——只看年报行会漏掉
+      「年报仍增长、中报已转负」的分红陷阱；累计同比口径本身可比，无季节性；
+    - ``op_cash_per_share``/``payout_stmt``：最近一个 12-31 年报行的
+      ``每股经营性现金流(元)``、``股息发放率(%)``——半年现金流与 TTM 分红不可比，
+      现金流口径固定为年报。
+
     财报季度更新，缓存 ``cache_dir/financial_cache.json``；失败不写缓存。
     """
     cache_path = Path(cache_dir) / FINANCIAL_CACHE_FILENAME
@@ -962,9 +969,19 @@ def get_financial_health(
     if isinstance(entry, dict) and _is_fresh(entry.get("updated_at"), cache_days):
         values = {
             key: entry.get(key)
-            for key in ("eps_growth", "op_cash_per_share", "payout_stmt")
+            for key in ("eps_growth", "eps_period", "op_cash_per_share", "payout_stmt")
         }
-        if all(v is None or isinstance(v, (int, float)) for v in values.values()):
+        numeric_ok = all(
+            value is None or isinstance(value, (int, float))
+            for key, value in values.items()
+            if key != "eps_period"
+        )
+        # 旧格式条目没有 eps_period → 视为过期重取；两个字段必须同有同无
+        period_ok = values["eps_period"] is None or isinstance(
+            values["eps_period"], str
+        )
+        paired_ok = (values["eps_growth"] is None) == (values["eps_period"] is None)
+        if numeric_ok and period_ok and paired_ok:
             return values
 
     start_year = str(date.today().year - 3)
@@ -976,18 +993,27 @@ def get_financial_health(
     annual = frame[frame["日期"].str.endswith("12-31")].sort_values("日期")
     if annual.empty:
         return None
-    latest = annual.iloc[-1]
+    latest_annual = annual.iloc[-1]
 
-    def _value(column: str) -> float | None:
-        if column not in annual.columns:
+    def _value(row, column: str) -> float | None:
+        if column not in frame.columns:
             return None
-        value = pd.to_numeric(latest[column], errors="coerce")
+        value = pd.to_numeric(row[column], errors="coerce")
         return None if pd.isna(value) else float(value)
 
+    # 最新报告期的净利润增长率；个别期留空时向前回退到最近一个有效值
+    eps_growth, eps_period = None, None
+    for _, row in frame.sort_values("日期", ascending=False).iterrows():
+        growth = _value(row, "净利润增长率(%)")
+        if growth is not None:
+            eps_growth, eps_period = growth, str(row["日期"])
+            break
+
     result = {
-        "eps_growth": _value("净利润增长率(%)"),
-        "op_cash_per_share": _value("每股经营性现金流(元)"),
-        "payout_stmt": _value("股息发放率(%)"),
+        "eps_growth": eps_growth,
+        "eps_period": eps_period,
+        "op_cash_per_share": _value(latest_annual, "每股经营性现金流(元)"),
+        "payout_stmt": _value(latest_annual, "股息发放率(%)"),
     }
     cache["stocks"][code] = {**result, "updated_at": datetime.now().isoformat()}
     _save_cache(cache_path, cache)

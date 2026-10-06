@@ -296,14 +296,33 @@ def _amount_text(wan: float) -> str:
     return f"{wan:.0f}万" if wan < 10000 else f"{wan / 10000:.1f}亿"
 
 
+_PERIOD_LABELS = {"03": "一季报", "06": "中报", "09": "三季报", "12": "年报"}
+
+
+def _report_period_label(period) -> str | None:
+    """报告期（``YYYY-MM-DD``）→「2026中报」样式；无法识别 → None。"""
+    if not isinstance(period, str):
+        return None
+    parts = period.split("-")
+    if len(parts) == 3 and parts[1] in _PERIOD_LABELS:
+        return f"{parts[0]}{_PERIOD_LABELS[parts[1]]}"
+    return None
+
+
 def _sustainability_phrases(sustainability: dict | None) -> list[str]:
-    """分红可持续性警示：盈利下滑 / 经营现金流为负 / 分红超现金流。"""
+    """分红可持续性警示：盈利下滑 / 经营现金流为负 / 分红超现金流。
+
+    盈利下滑带报告期标注（如「盈利下滑 13%（2026中报）」），便于区分年报与
+    中报口径；现金流类红标固定为年报口径，不加标注。
+    """
     if not sustainability:
         return []
     phrases = []
     eps_growth = sustainability.get("eps_growth")
     if eps_growth is not None and float(eps_growth) < 0:
-        phrases.append(f"盈利下滑 {abs(float(eps_growth)):.0f}%")
+        label = _report_period_label(sustainability.get("eps_period"))
+        suffix = f"（{label}）" if label else ""
+        phrases.append(f"盈利下滑 {abs(float(eps_growth)):.0f}%{suffix}")
     op_cash = sustainability.get("op_cash_per_share")
     cash_cover = sustainability.get("cash_cover")
     if op_cash is not None and float(op_cash) <= 0:

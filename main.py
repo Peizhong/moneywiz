@@ -161,9 +161,10 @@ def _stock_result(
 
 
 def _sustainability(code, dividends, as_of, cache_dir, financial_cache_days):
-    """分红可持续性（仅标注，不参与打分）：盈利下滑 / 经营现金流为负 / 分红超现金流。
+    """分红可持续性红标：盈利下滑 / 经营现金流为负 / 分红超现金流。
 
-    数据来自年报口径的 ``get_financial_health``（带 cache_days 缓存）；任一数据缺失
+    数据来自 ``get_financial_health``（带 cache_days 缓存）：盈利下滑按最新报告期
+    （含中报/季报）净利润同比，现金流与分红覆盖率按最近年报口径；任一数据缺失
     只影响对应警示。
     """
     health = _fetch(
@@ -181,6 +182,7 @@ def _sustainability(code, dividends, as_of, cache_dir, financial_cache_days):
         cash_cover = ttm_per_share / op_cash * 100.0
     return {
         "eps_growth": health.get("eps_growth"),
+        "eps_period": health.get("eps_period"),
         "op_cash_per_share": op_cash,
         "cash_cover": cash_cover,
     }

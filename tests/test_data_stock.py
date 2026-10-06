@@ -545,19 +545,30 @@ def test_eastmoney_failure_trips_breaker_even_without_fallback(monkeypatch):
 
 
 def _financial_frame():
-    """stock_financial_analysis_indicator 原始列名的最小帧（按报告期升序，含季报）。"""
+    """stock_financial_analysis_indicator 原始列名的最小帧（按报告期升序，含季报）。
+
+    形态取「年报仍增长（2025-12-31 +3.0%）、最新中报已转负（-12.9%）」的分红
+    陷阱场景：净利润增长率必须取最新报告期；每股现金流只能取年报行（中报的
+    半年现金流与 TTM 分红不可比）。
+    """
     return pd.DataFrame(
         {
-            "日期": ["2023-12-31", "2024-12-31", "2025-12-31", "2026-06-30"],
-            "摊薄每股收益(元)": [0.9, 1.1, 1.0, 0.5],
-            "每股经营性现金流(元)": [1.1, 1.0, 1.2, 0.6],
-            "净利润增长率(%)": [8.0, 5.0, -12.6, 3.0],
-            "股息发放率(%)": [35.0, 40.0, 118.0, 30.0],
+            "日期": [
+                "2023-12-31",
+                "2024-12-31",
+                "2025-12-31",
+                "2026-03-31",
+                "2026-06-30",
+            ],
+            "摊薄每股收益(元)": [0.9, 1.1, 1.0, 0.3, 0.5],
+            "每股经营性现金流(元)": [1.1, 1.0, 2.77, 0.17, 0.6],
+            "净利润增长率(%)": [8.0, 5.0, 3.0, -14.7, -12.9],
+            "股息发放率(%)": [35.0, 40.0, 60.0, 0.1, 30.0],
         }
     )
 
 
-def test_financial_health_uses_latest_annual_row(monkeypatch, tmp_path):
+def test_financial_health_eps_growth_uses_latest_period(monkeypatch, tmp_path):
     calls = {}
 
     def fake(symbol, start_year):
@@ -569,13 +580,45 @@ def test_financial_health_uses_latest_annual_row(monkeypatch, tmp_path):
 
     out = get_financial_health("600015", tmp_path)
 
+    # 增长率取最新报告期（中报 -12.9%），而不是年报行（+3.0%）；
+    # 每股现金流/股息发放率固定取最近年报行
     assert out == {
-        "eps_growth": pytest.approx(-12.6),
-        "op_cash_per_share": pytest.approx(1.2),
-        "payout_stmt": pytest.approx(118.0),
+        "eps_growth": pytest.approx(-12.9),
+        "eps_period": "2026-06-30",
+        "op_cash_per_share": pytest.approx(2.77),
+        "payout_stmt": pytest.approx(60.0),
     }
     assert calls["symbol"] == "600015"
     assert int(calls["start_year"]) <= date.today().year - 3  # 只请求近几年的报告
+
+
+def test_financial_health_eps_growth_falls_back_when_latest_blank(
+    monkeypatch, tmp_path
+):
+    frame = _financial_frame()
+    frame.loc[frame["日期"] == "2026-06-30", "净利润增长率(%)"] = None
+    monkeypatch.setattr(
+        ak, "stock_financial_analysis_indicator", lambda symbol, start_year: frame
+    )
+
+    out = get_financial_health("600015", tmp_path)
+
+    assert out["eps_growth"] == pytest.approx(-14.7)  # 最新行留空 → 回退到最近有效行
+    assert out["eps_period"] == "2026-03-31"
+
+
+def test_financial_health_annual_only_frame_uses_annual_period(monkeypatch, tmp_path):
+    frame = _financial_frame()
+    frame = frame[frame["日期"].str.endswith("12-31")]
+    monkeypatch.setattr(
+        ak, "stock_financial_analysis_indicator", lambda symbol, start_year: frame
+    )
+
+    out = get_financial_health("600015", tmp_path)
+
+    # 帧内只有年报行时与旧口径一致
+    assert out["eps_growth"] == pytest.approx(3.0)
+    assert out["eps_period"] == "2025-12-31"
 
 
 def test_financial_health_without_annual_rows_returns_none(monkeypatch, tmp_path):
@@ -616,6 +659,36 @@ def test_financial_health_cache_hit_skips_upstream(monkeypatch, tmp_path):
     assert (tmp_path / "financial_cache.json").exists()
 
 
+def test_financial_health_legacy_cache_entry_without_period_refetches(
+    monkeypatch, tmp_path
+):
+    legacy = {
+        "stocks": {
+            "600015": {
+                "eps_growth": 1.0,
+                "op_cash_per_share": 2.0,
+                "payout_stmt": None,
+                "updated_at": datetime.now().isoformat(),  # 未过期，但缺 eps_period
+            }
+        }
+    }
+    (tmp_path / "financial_cache.json").write_text(
+        json.dumps(legacy, ensure_ascii=False), encoding="utf-8"
+    )
+    calls = []
+
+    def fake(symbol, start_year):
+        calls.append(1)
+        return _financial_frame()
+
+    monkeypatch.setattr(ak, "stock_financial_analysis_indicator", fake)
+
+    out = get_financial_health("600015", tmp_path)
+
+    assert len(calls) == 1  # 旧格式（缺 eps_period）视为过期，重新拉取
+    assert out["eps_period"] == "2026-06-30"
+
+
 def test_financial_health_cache_expiry_refetches(monkeypatch, tmp_path):
     stale = {
         "stocks": {
@@ -641,7 +714,7 @@ def test_financial_health_cache_expiry_refetches(monkeypatch, tmp_path):
     out = get_financial_health("600015", tmp_path)
 
     assert len(calls) == 1  # 过期条目重新拉取
-    assert out["eps_growth"] == pytest.approx(-12.6)
+    assert out["eps_growth"] == pytest.approx(-12.9)
 
 
 def test_financial_health_corrupt_cache_rebuilds(monkeypatch, tmp_path):

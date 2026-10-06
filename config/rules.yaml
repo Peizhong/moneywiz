@@ -26,7 +26,8 @@ stocks:
       weight: 5
       thresholds: { oversold: -10, overbought: 10 }
 
-  # 财报红标对总分的扣减（%）：盈利下滑 / 经营现金流为负 / 分红超现金流，封顶 30%
+  # 财报红标对总分的扣减（%）：盈利下滑（按最新报告期同比，含中报/季报）/
+  # 经营现金流为负 / 分红超现金流（两者按最近年报口径），封顶 30%
   sustainability:
     eps_decline_penalty: 10
     negative_cash_penalty: 15
