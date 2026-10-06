@@ -15,6 +15,7 @@ from src.indicators import (
     calc_price_position,
     calc_rsi,
     calc_turnover_amount,
+    calc_max_drawdown,
     calc_volatility,
 )
 
@@ -167,6 +168,34 @@ def test_volatility_is_annualized_std_of_returns():
 def test_volatility_insufficient_rows_return_none():
     assert calc_volatility(None) is None
     assert calc_volatility(_kline_frame([10.0] * 29)) is None
+
+
+def test_max_drawdown_of_monotonic_rise_is_zero():
+    frame = _kline_frame([10.0 + index * 0.1 for index in range(40)])
+
+    assert calc_max_drawdown(frame) == pytest.approx(0.0)
+
+
+def test_max_drawdown_measures_peak_to_trough():
+    frame = _kline_frame([10.0] * 10 + [8.0] * 20 + [10.0] * 10)
+
+    assert calc_max_drawdown(frame) == pytest.approx(20.0)
+
+
+def test_max_drawdown_adds_back_dividend_drop_when_dividends_given():
+    closes = [10.0] * 20 + [9.5] * 20  # 除息日一次性 -5%（每股派 0.5 元）
+    frame = _kline_frame(closes)
+    dividends = pd.DataFrame(
+        {"date": [frame["date"].iloc[20]], "dividend_per_share": [0.5]}
+    )
+
+    assert calc_max_drawdown(frame) == pytest.approx(5.0)  # 纯价格口径
+    assert calc_max_drawdown(frame, dividends) == pytest.approx(0.0)  # 总回报口径
+
+
+def test_max_drawdown_none_or_short_returns_none():
+    assert calc_max_drawdown(None) is None
+    assert calc_max_drawdown(_kline_frame([10.0] * 29)) is None
 
 
 def test_turnover_amount_is_median_volume_times_close_in_wan():

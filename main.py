@@ -136,6 +136,8 @@ def _stock_result(
     dividend_yield = _num(indicators.calc_dividend_yield(dividends, price, as_of))
     ma60 = _num(indicators.calc_ma(kline, window=60))
     macd = indicators.calc_macd(kline)
+    # 稳定性指标（波动率/最大回撤）共用近一年窗口的不复权 K 线
+    raw_window = raw_kline.tail(VOLATILITY_WINDOW) if raw_kline is not None else None
 
     values = {
         "dividend_yield": dividend_yield,
@@ -149,10 +151,9 @@ def _stock_result(
         "pb_vs_industry": _num(indicators.calc_pb_vs_industry(pb, industry_pb)),
         "ma60_position": _num(indicators.calc_ma60_position(price, ma60)),
         "momentum_5d": _num(indicators.calc_momentum_5d(kline)),
-        "volatility": _num(
-            indicators.calc_volatility(
-                raw_kline.tail(VOLATILITY_WINDOW) if raw_kline is not None else None
-            )
+        "volatility": _num(indicators.calc_volatility(raw_window)),
+        "max_drawdown": _num(
+            indicators.calc_max_drawdown(raw_window, dividends)
         ),
     }
     tech = {

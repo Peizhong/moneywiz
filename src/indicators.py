@@ -302,6 +302,37 @@ def calc_volatility(kline: pd.DataFrame | None, trading_days: int = 244) -> floa
     return float(returns.std(ddof=1) * math.sqrt(trading_days) * 100.0)
 
 
+def calc_max_drawdown(
+    kline: pd.DataFrame | None,
+    dividends: pd.DataFrame | None = None,
+) -> float | None:
+    """区间最大回撤（峰值到谷底，正数 %）；不足 30 行有效收盘价 → None。
+
+    ``dividends`` 给定时按**总回报口径**计算：已实施分红按除权除息日加回
+    当日价格（等价于前复权收益），避免高股息标的被除息日的价格下跌虚增
+    回撤；缺省则按纯价格口径。
+    """
+    if kline is None or len(kline) < 30:
+        return None
+    frame = kline.dropna(subset=["close"])
+    if len(frame) < 30:
+        return None
+    closes = frame["close"].to_numpy(dtype=float)
+    payout = np.zeros(len(frame))
+    if dividends is not None and not dividends.empty:
+        amounts = dividends.dropna(subset=["date", "dividend_per_share"])
+        per_day = amounts.groupby(amounts["date"].dt.normalize())[
+            "dividend_per_share"
+        ].sum()
+        payout = (
+            frame["date"].dt.normalize().map(per_day).fillna(0.0).to_numpy(dtype=float)
+        )
+    returns = (closes[1:] + payout[1:]) / closes[:-1] - 1.0
+    index = np.concatenate(([1.0], np.cumprod(1.0 + returns)))
+    drawdown = (1.0 - index / np.maximum.accumulate(index)).max()
+    return float(drawdown * 100.0)
+
+
 def calc_turnover_amount(kline: pd.DataFrame | None, days: int = 60) -> float | None:
     """近 ``days`` 日成交额中位数（万元；成交量按"手"×100×收盘价估算）。
 

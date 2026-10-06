@@ -20,11 +20,14 @@ stocks:
       weight: 15
       thresholds: { discount: -30, premium: 30 }
     pb_vs_industry:
-      weight: 10
+      weight: 5
       thresholds: { discount: -30, premium: 30 }
     volatility:
       weight: 15
       thresholds: { low: 20, mid: 30 }    # 年化波动率（%）越低越好：≤20/＜30 对应 1.0/0.5
+    max_drawdown:
+      weight: 5
+      thresholds: { low: 15, mid: 25 }    # 近一年最大回撤（%）越低越好：含分红总回报口径
     # ma60_position（均线位置）与 momentum_5d（5日动量）为短线择时指标，
     # 与"长期持有、稳定优先"的目标冲突，让位于 volatility；如需可自行加回
 

@@ -71,6 +71,7 @@ _TIERS: dict[str, Tier] = {
     "dividend_yield_percentile": _higher_better,  # 当前股息率相对自身历史的分位
     "dividend_years": _higher_better,
     "volatility": _two_sided("low", "mid"),  # 年化波动率：越低越好（稳定优先）
+    "max_drawdown": _two_sided("low", "mid"),  # 近一年最大回撤：越低越好
     "dividend_frequency": _higher_better,
     "dividend_trend": _higher_better,  # 阈值 {high: 0, mid: -30}：分红下降越大分越低
     "payout_ratio": _range,

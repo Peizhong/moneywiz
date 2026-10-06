@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-红利投资筛选工具：读取自选股票/基金与多个红利指数成分股，经 akshare/腾讯/新浪等数据源拉取行情、分红、年报数据，按 13 个指标（股票 8 + 基金 5）加权打分（总分另受分红可持续性红标扣分），终端输出排序信号表。代码与文档以中文为主（docstrings、日志、README、提交信息）。
+红利投资筛选工具：读取自选股票/基金与多个红利指数成分股，经 akshare/腾讯/新浪等数据源拉取行情、分红、年报数据，按 14 个指标（股票 9 + 基金 5）加权打分（总分另受分红可持续性红标扣分），终端输出排序信号表。代码与文档以中文为主（docstrings、日志、README、提交信息）。
 
 设计与实现的原始文档在 `docs/superpowers/specs/` 与 `docs/superpowers/plans/`（含“关键口径决策”一节——改动打分/口径前先读它）。
 
@@ -63,5 +63,5 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt -r requiremen
 - 新增 akshare 调用一律写在 `src/data.py`；indicators/scorer/reporter/config/constituents 不得 import akshare。
 - 配置校验集中在 `src/config.py`：错误信息必须含文件路径与字段名；指标权重总和必须为 100。
 - `config/` 下是用户自己维护的数据（自选、基金、成分股），改动前先确认；`cache/` 是可再生的，可随意清理。
-- 打分模型的方向性约定：股息率/估值越低分越高、超卖/折价越好；**波动率越低越好（权重 15，取近 250 根不复权 K 线年化，与股息率分位共用取数）**；位置与流动性不参与打分——位置只并入亮点（低位）/风险（高位）文字，但**高位（120 日分位 ≥70%）会取消「买入」资格、名额按名次顺延**（`reporter._signals`，唯一影响信号分配的呈现规则）；流动性只标注（`risk_hints.turnover_low`）。分红可持续性红标**参与打分**：在加权总分上按项扣分（盈利下滑 -10%、现金流为负 -15%、分红超现金流 -10%，封顶 -30%，见 rules.yaml `stocks.sustainability`；盈利下滑判据 = **最新报告期**净利润同比，含中报/季报，现金流类口径 = 最近年报）；分红趋势是正式打分指标（权重 10）。口径细节见 plan 的「关键口径决策」与 README「输出说明」。
+- 打分模型的方向性约定：股息率/估值越低分越高、超卖/折价越好；**波动率与最大回撤越低越好（权重 15/5，取近 250 根不复权 K 线，与股息率分位共用取数；回撤按含分红总回报口径）**；位置与流动性不参与打分——位置只并入亮点（低位）/风险（高位）文字，但**高位（120 日分位 ≥70%）会取消「买入」资格、名额按名次顺延**（`reporter._signals`，唯一影响信号分配的呈现规则）；流动性只标注（`risk_hints.turnover_low`）。分红可持续性红标**参与打分**：在加权总分上按项扣分（盈利下滑 -10%、现金流为负 -15%、分红超现金流 -10%，封顶 -30%，见 rules.yaml `stocks.sustainability`；盈利下滑判据 = **最新报告期**净利润同比，含中报/季报，现金流类口径 = 最近年报）；分红趋势是正式打分指标（权重 10）。口径细节见 plan 的「关键口径决策」与 README「输出说明」。
 - 提交信息末尾加 `Co-Authored-By: Claude Code <noreply@anthropic.com>`。

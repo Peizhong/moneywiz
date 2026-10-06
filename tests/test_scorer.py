@@ -18,6 +18,7 @@ from src.scorer import (
 YIELD_TH = {"high": 4.0, "mid": 2.0}
 YIELD_PCT_TH = {"high": 70, "mid": 40}
 VOL_TH = {"low": 20, "mid": 30}
+MAX_DD_TH = {"low": 15, "mid": 25}
 YEARS_TH = {"high": 5, "mid": 3}
 PAYOUT_TH = {"min": 20, "max": 70}
 PE_INDUSTRY_TH = {"discount": -30, "premium": 30}
@@ -85,6 +86,11 @@ FUND_SIZE_TH = {"min": 1}
         ("volatility", 20, VOL_TH, 1.0),
         ("volatility", 26, VOL_TH, 0.5),
         ("volatility", 41, VOL_TH, 0.0),
+        # max_drawdown {low: 15, mid: 25}：越低越好
+        ("max_drawdown", 10, MAX_DD_TH, 1.0),
+        ("max_drawdown", 15, MAX_DD_TH, 1.0),
+        ("max_drawdown", 20, MAX_DD_TH, 0.5),
+        ("max_drawdown", 47, MAX_DD_TH, 0.0),
     ],
 )
 def test_normalize_tier_boundaries(indicator, value, thresholds, expected):

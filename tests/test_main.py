@@ -441,11 +441,12 @@ def test_run_scores_dividend_yield_percentile(monkeypatch, tmp_path):
     assert "100.0" in row
 
 
-def test_run_scores_volatility_and_reports_liquidity_hint(monkeypatch, tmp_path):
+def test_run_scores_stability_and_reports_liquidity_hint(monkeypatch, tmp_path):
     rules = {
         "stocks": {
             "indicators": {
-                "volatility": {"weight": 100, "thresholds": {"low": 20, "mid": 30}}
+                "volatility": {"weight": 50, "thresholds": {"low": 20, "mid": 30}},
+                "max_drawdown": {"weight": 50, "thresholds": {"low": 15, "mid": 25}},
             }
         },
         "funds": {
@@ -473,7 +474,8 @@ def test_run_scores_volatility_and_reports_liquidity_hint(monkeypatch, tmp_path)
     def wild_closes():
         closes = [10.0]
         for index in range(259):
-            closes.append(closes[-1] * (1.05 if index % 2 == 0 else 0.95))  # ±5% 交替
+            step = 1.05 if index % 2 == 0 else 0.95
+            closes.append(closes[-1] * step * 0.997)  # ±5% 交替 + 慢下行 → 高波动 + 深回撤
         return closes
 
     def raw_kline_for(code, days=790):
@@ -494,7 +496,8 @@ def test_run_scores_volatility_and_reports_liquidity_hint(monkeypatch, tmp_path)
     report = main.run(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
 
     row = _row_for(report, "平安银行")
-    assert "波动率" in row  # ±5% 交替 → 年化 ~78%，>30 → 零分档进风险列
+    assert "波动率" in row  # ±5% 交替 → 年化 ~78% → 零分档进风险列
+    assert "最大回撤" in row  # 慢下行累积 → 回撤 >25% → 零分档进风险列
     assert "日均成交" in row  # 5 万 << 默认 5000 万 → 流动性提示
 
 

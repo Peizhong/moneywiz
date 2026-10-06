@@ -541,17 +541,23 @@ def test_risk_hint_respects_turnover_threshold_and_large_amount_scale():
     assert "日均成交 1.5亿" in row  # 大额以亿显示
 
 
-def test_volatility_tiers_show_in_highlight_and_risk_columns():
-    calm = _result("600900", "长江电力", 80.0, scores={"volatility": 1.0})
-    calm["values"] = {"volatility": 13.3}
-    wild = _result("002128", "电投能源", 60.0, scores={"volatility": 0.0})
-    wild["values"] = {"volatility": 41.1}
+def test_stability_tiers_show_in_highlight_and_risk_columns():
+    calm = _result(
+        "600900", "长江电力", 80.0, scores={"volatility": 1.0, "max_drawdown": 1.0}
+    )
+    calm["values"] = {"volatility": 13.3, "max_drawdown": 10.4}
+    wild = _result(
+        "002532", "天山铝业", 60.0, scores={"volatility": 0.0, "max_drawdown": 0.0}
+    )
+    wild["values"] = {"volatility": 51.0, "max_drawdown": 47.4}
 
     report = render_report([calm, wild], [], OUTPUT_CFG, 1.0)
 
     rows = _table_rows(report, STOCK_HEADER)
     assert "波动率 13.3%" in rows[0]  # 满分档 → 亮点
-    assert "波动率 41.1%" in rows[1]  # 零分档 → 风险（不再有重复的提示行）
+    assert "最大回撤 10.4%" in rows[0]
+    assert "波动率 51.0%" in rows[1]  # 零分档 → 风险（不再有重复的提示行）
+    assert "最大回撤 47.4%" in rows[1]
 
 
 def test_negative_operating_cash_flow_warning():
