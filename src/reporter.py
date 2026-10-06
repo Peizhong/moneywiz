@@ -62,21 +62,48 @@ NO_SCORE_SIGNAL = "数据不足"
 COLUMNS = ["排名", "代码", "名称", "总分", "覆盖", "信号", "亮点", "风险", "技术"]
 
 
-def signal_for(
-    rank: int,
+def _signals(
+    items: list[dict],
+    ranks: list[tuple[int, int]],
     total_count: int,
     buy_top_n: int,
     avoid_bottom_n: int,
-    has_score: bool,
-) -> str:
-    """按（并列）排名给出信号：无分 → 数据不足；前 N → 买入；末尾 N → 末位；否则观察。"""
-    if not has_score:
-        return NO_SCORE_SIGNAL
-    if rank <= buy_top_n:
-        return "买入"
-    if rank > total_count - avoid_bottom_n:
-        return "末位"
-    return "观察"
+) -> list[str]:
+    """逐行分配信号（与 items 对齐）。
+
+    买入：按名次顺序发给「有分且非高位」的标的，共 buy_top_n 个标签；处于
+    120 日高位（≥ ``POSITION_HIGH``，与「120日高位」风险短语同一阈值）的标的
+    不占名额，空出的名额由后续标的递补。同分组整组收发——不切开同分，递补时
+    标签数可能略超 buy_top_n（与并列超发语义一致）。
+    末位/数据不足的判定与位置无关；「数据不足」不占买入/末位名额。
+    """
+    signals: list[str] = []
+    buy_granted = 0
+    group_active = False  # 当前同分组的非高位成员是否处于买入档
+    prev_rank: int | None = None
+    for (rank, _tied_count), item in zip(ranks, items):
+        if rank != prev_rank:
+            prev_rank = rank
+            group_active = buy_granted < buy_top_n
+        if item["total"] is None:
+            signals.append(NO_SCORE_SIGNAL)
+            continue
+        high = _position_phrases(item.get("position"))[1] is not None
+        if group_active and not high:
+            signals.append("买入")
+            buy_granted += 1
+            continue
+        if rank <= buy_top_n:
+            # 买入区内的非高位已在上方取走「买入」，到这里只可能是被高位剥夺的
+            # 标的 → 观察。不落入末位区：表内标的少于 avoid_bottom_n 时末位区会
+            # 覆盖全表（如仅 1 只基金、avoid=5），否则会被误标「末位」。
+            signals.append("观察")
+            continue
+        if rank > total_count - avoid_bottom_n:
+            signals.append("末位")
+            continue
+        signals.append("观察")
+    return signals
 
 
 def render_report(
@@ -144,7 +171,14 @@ def _table(results: list[dict], output_cfg: dict, risk_hints: dict | None = None
     # 不参与买入/末位名额。
     items = _sorted_results(results)
     ranks = _competition_ranks(items)
-    for (rank, tied_count), item in zip(ranks, items):
+    signals = _signals(
+        items,
+        ranks,
+        len(results),
+        output_cfg["buy_top_n"],
+        output_cfg["avoid_bottom_n"],
+    )
+    for (rank, tied_count), item, signal in zip(ranks, items, signals):
         total = item["total"]
         has_score = total is not None
         scores = item.get("scores") or {}
@@ -161,13 +195,7 @@ def _table(results: list[dict], output_cfg: dict, risk_hints: dict | None = None
                 name_text,
                 f"{total:.1f}" if has_score else "N/A",
                 _coverage_text(scores, item.get("missing")),
-                signal_for(
-                    rank,
-                    len(results),
-                    output_cfg["buy_top_n"],
-                    output_cfg["avoid_bottom_n"],
-                    has_score,
-                ),
+                signal,
                 _detail_text(scores, values, 1.0, low_phrase),
                 _risk_text(
                     scores,

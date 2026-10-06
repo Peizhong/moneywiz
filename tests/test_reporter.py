@@ -5,7 +5,7 @@
 
 import pytest
 
-from src.reporter import render_report, signal_for
+from src.reporter import _competition_ranks, _signals, render_report
 
 OUTPUT_CFG = {"buy_top_n": 5, "avoid_bottom_n": 5}
 
@@ -137,6 +137,21 @@ def _table_rows(report, header):
     return rows
 
 
+def _signals_at(rank, total_count, buy_top_n, avoid_bottom_n, has_score, position=None):
+    """构造 total_count 只标的（名次 = 下标 + 1），返回第 rank 名的信号。"""
+    items = []
+    for index in range(1, total_count + 1):
+        total = None if (index == rank and not has_score) else float(1000 - index)
+        item = _result(
+            f"60{index:04d}", f"股{index}", total, scores={"dividend_yield": 1.0}
+        )
+        if index == rank and position is not None:
+            item["position"] = position
+        items.append(item)
+    ranks = _competition_ranks(items)
+    return _signals(items, ranks, total_count, buy_top_n, avoid_bottom_n)[rank - 1]
+
+
 @pytest.mark.parametrize(
     ("rank", "total_count", "buy_top_n", "avoid_bottom_n", "has_score", "expected"),
     [
@@ -158,11 +173,11 @@ def _table_rows(report, header):
         (10, 10, 2, 2, True, "末位"),
     ],
 )
-def test_signal_for_rank_boundaries(
+def test_signals_rank_boundaries(
     rank, total_count, buy_top_n, avoid_bottom_n, has_score, expected
 ):
     assert (
-        signal_for(rank, total_count, buy_top_n, avoid_bottom_n, has_score)
+        _signals_at(rank, total_count, buy_top_n, avoid_bottom_n, has_score)
         == expected
     )
 
@@ -252,6 +267,85 @@ def test_ties_share_rank_and_boundary_signal():
     rows = _table_rows(report, STOCK_HEADER)
     assert all("并列6" in row for row in rows)
     assert all("买入" in row for row in rows)
+
+
+def test_high_position_stock_not_marked_buy_and_slot_passes_down():
+    results = [
+        _result(f"60000{i}", f"股{i}", float(100 - i), scores={"dividend_yield": 1.0})
+        for i in range(1, 7)
+    ]
+    results[4]["position"] = 89.0  # 第 5 名处于 120 日高位
+
+    report = render_report(results, [], {"buy_top_n": 5, "avoid_bottom_n": 1}, 0.0)
+
+    rows = _table_rows(report, STOCK_HEADER)
+    assert "买入" in rows[0] and "买入" in rows[3]
+    assert "观察" in rows[4] and "买入" not in rows[4]
+    assert "120日高位 89%" in rows[4]
+    assert "买入" in rows[5]  # 空出的名额顺延给第 6 名
+
+
+def test_high_position_extension_keeps_tie_group_whole():
+    results = [
+        _result("600001", "甲", 100.0, scores={"dividend_yield": 1.0}),
+        _result("600002", "乙", 99.0, scores={"dividend_yield": 1.0}),
+        _result("600003", "丙", 98.0, scores={"dividend_yield": 1.0}),
+        _result("600004", "丁", 97.0, scores={"dividend_yield": 1.0}),
+        _result("600005", "戊", 96.0, scores={"dividend_yield": 1.0}),  # 高位
+        _result("600006", "己", 95.0, scores={"dividend_yield": 1.0}),  # 并列 6
+        _result("600007", "庚", 95.0, scores={"dividend_yield": 1.0}),  # 并列 6
+        _result("600008", "辛", 60.0, scores={"dividend_yield": 0.5}),
+    ]
+    results[4]["position"] = 89.0
+
+    report = render_report(results, [], {"buy_top_n": 5, "avoid_bottom_n": 1}, 0.0)
+
+    rows = _table_rows(report, STOCK_HEADER)
+    assert "观察" in rows[4] and "买入" not in rows[4]
+    assert "6(并列2)" in rows[5] and "买入" in rows[5]  # 递补整组收发
+    assert "6(并列2)" in rows[6] and "买入" in rows[6]
+    assert "末位" in rows[7]
+
+
+def test_high_position_in_bottom_zone_still_marked_avoid():
+    results = [
+        _result(f"60000{i}", f"股{i}", float(100 - i), scores={"dividend_yield": 1.0})
+        for i in range(1, 7)
+    ]
+    results[5]["position"] = 95.0  # 末位区且高位
+
+    report = render_report(results, [], {"buy_top_n": 5, "avoid_bottom_n": 1}, 0.0)
+
+    rows = _table_rows(report, STOCK_HEADER)
+    assert "末位" in rows[5]  # 高位不影响末位判定
+    assert "120日高位 95%" in rows[5]
+
+
+def test_high_position_row_with_oversized_avoid_zone_stays_watch():
+    # 表内标的少于 avoid_bottom_n（如仅 1 只基金、avoid=5）：末位区覆盖全表，
+    # 高位被剥夺「买入」的标的应落为「观察」，不能误标「末位」
+    item = _result("510880", "红利ETF", 67.5, scores={"dividend_yield": 1.0})
+    item["position"] = 78.0
+
+    report = render_report([item], [], {"buy_top_n": 5, "avoid_bottom_n": 5}, 0.0)
+
+    rows = _table_rows(report, STOCK_HEADER)
+    assert "观察" in rows[0] and "末位" not in rows[0]
+
+
+def test_buy_eligibility_uses_same_threshold_as_high_position_phrase():
+    at_threshold = _result("600001", "甲", 100.0, scores={"dividend_yield": 1.0})
+    at_threshold["position"] = 70.0  # 与「120日高位」同一阈值：≥70 即高位
+    below = _result("600002", "乙", 90.0, scores={"dividend_yield": 1.0})
+    below["position"] = 69.9
+
+    report = render_report(
+        [at_threshold, below], [], {"buy_top_n": 5, "avoid_bottom_n": 0}, 0.0
+    )
+
+    rows = _table_rows(report, STOCK_HEADER)
+    assert "观察" in rows[0] and "120日高位 70%" in rows[0]
+    assert "买入" in rows[1]
 
 
 def test_competition_rank_skips_after_tie_group():
