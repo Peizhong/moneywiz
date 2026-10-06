@@ -80,6 +80,8 @@ DATA_FUNCTIONS = (
     "get_fund_overview",
     "resolve_index_symbol",
     "get_index_pe_history",
+    "get_index_dividend_yield",
+    "get_10y_bond_yield",
 )
 
 
@@ -191,6 +193,8 @@ def _happy_overrides(**extra):
         },
         "resolve_index_symbol": lambda configured, tracker: "上证红利",
         "get_index_pe_history": lambda symbol: INDEX_PE,
+        "get_index_dividend_yield": lambda index_code="000922": 4.2,
+        "get_10y_bond_yield": lambda: 1.8,
         **extra,
     }
 
@@ -275,6 +279,19 @@ def test_run_kline_failure_keeps_other_indicators_scoring(
     assert "平安银行" in report and "红利ETF" in report  # 其余标的不受影响
 
 
+def test_run_includes_market_header(monkeypatch, config_dir, tmp_path):
+    _patch_data(monkeypatch, **_happy_overrides())
+
+    report = main.run(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
+
+    assert "【板块温度计】" in report
+    assert "中证红利股息率 4.20%" in report
+    assert "10Y国债 1.80%" in report
+    assert "利差 +2.40pct" in report
+    # 上证红利 PE 分位复用 get_index_pe_history 的 fixture
+    assert "上证红利PE分位" in report
+
+
 def test_run_includes_price_position_in_rows(monkeypatch, config_dir, tmp_path):
     def kline_for(code, days=120, as_of=None):
         if code == STOCK_B:
@@ -300,6 +317,7 @@ def test_run_all_sources_failing_reports_insufficient_data(
         row = _row_for(report, name)
         assert "N/A" in row and "数据不足" in row
     assert "数据不足 3" in report
+    assert "【板块温度计】" not in report  # 温度计数据全部缺失时不显示该行
 
 
 def test_run_spot_table_failure_warns_once_not_per_stock(

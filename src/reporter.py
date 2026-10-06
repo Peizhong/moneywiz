@@ -78,8 +78,9 @@ def render_report(
     fund_results: list[dict],
     output_cfg: dict,
     elapsed_s: float,
+    market: dict | None = None,
 ) -> str:
-    """渲染完整报告：股票表、基金表、摘要行，以换行连接。"""
+    """渲染完整报告：板块温度计（可选）、股票表、基金表、摘要行，以换行连接。"""
     all_results = (*stock_results, *fund_results)
     total = len(all_results)
     no_score = sum(1 for r in all_results if r["total"] is None)
@@ -92,7 +93,11 @@ def render_report(
         f"扫描 {total} 只标的（股票 {len(stock_results)} / 基金 {len(fund_results)}），"
         f"数据不足 {no_score}，指标不全 {partial}，耗时 {elapsed_s:.1f}s"
     )
-    return "\n".join(
+    blocks = []
+    market_text = _market_text(market) if market else ""
+    if market_text:
+        blocks.append(market_text)
+    blocks.extend(
         [
             STOCK_HEADER,
             _table(stock_results, output_cfg),
@@ -101,6 +106,24 @@ def render_report(
             summary,
         ]
     )
+    return "\n".join(blocks)
+
+
+def _market_text(market: dict) -> str:
+    """板块温度计一行：中证红利股息率、10Y 国债、利差、上证红利 PE 分位。
+
+    缺失字段跳过；全部缺失时返回空串（调用方不显示该行）。
+    """
+    parts = []
+    if market.get("dividend_yield") is not None:
+        parts.append(f"中证红利股息率 {market['dividend_yield']:.2f}%")
+    if market.get("bond_10y") is not None:
+        parts.append(f"10Y国债 {market['bond_10y']:.2f}%")
+    if market.get("spread") is not None:
+        parts.append(f"利差 {market['spread']:+.2f}pct")
+    if market.get("index_pe_position") is not None:
+        parts.append(f"上证红利PE分位 {market['index_pe_position']:.0f}%")
+    return f"【板块温度计】{'，'.join(parts)}" if parts else ""
 
 
 def _table(results: list[dict], output_cfg: dict) -> str:

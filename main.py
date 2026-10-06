@@ -141,6 +141,33 @@ def _fetch_fund_quotes(cfg_funds):
     return quotes
 
 
+def _market_context():
+    """板块温度计：中证红利股息率、10Y 国债收益率、利差、上证红利 PE 分位。
+
+    任一数据源失败只影响对应字段；全部缺失时返回 None（报告不显示该行）。
+    """
+    dividend = _fetch(
+        lambda: data.get_index_dividend_yield(), "get_index_dividend_yield"
+    )
+    bond = _fetch(lambda: data.get_10y_bond_yield(), "get_10y_bond_yield")
+    pe_history = _fetch(
+        lambda: data.get_index_pe_history("上证红利"),
+        "get_index_pe_history(上证红利)",
+    )
+    position = _num(indicators.calc_index_pe_position(pe_history))
+    spread = None
+    if dividend is not None and bond is not None:
+        spread = dividend - bond
+    if dividend is None and bond is None and position is None:
+        return None
+    return {
+        "dividend_yield": dividend,
+        "bond_10y": bond,
+        "spread": spread,
+        "index_pe_position": position,
+    }
+
+
 def _fund_result(fund, quotes, as_of, kline_days, rules_section):
     """组装一只基金：每个数据源独立降级，任一失败只影响对应指标。"""
     row = _quote_row(quotes, fund.code)
@@ -224,6 +251,7 @@ def run(
         "get_stock_spot",
     )
     fund_quotes = _fetch_fund_quotes(cfg.funds)
+    market = _market_context()
 
     stock_results = [
         _stock_result(
@@ -248,7 +276,11 @@ def run(
         for fund in cfg.funds
     ]
     return reporter.render_report(
-        stock_results, fund_results, cfg.output, time.monotonic() - started
+        stock_results,
+        fund_results,
+        cfg.output,
+        time.monotonic() - started,
+        market=market,
     )
 
 

@@ -672,3 +672,42 @@ def get_index_pe_history(index_symbol: str) -> pd.DataFrame | None:
         }
     )
     return frame.sort_values("date").dropna(subset=["pe"]).reset_index(drop=True)
+
+
+# ---------------------------------------------------------------------------
+# 市场温度计（板块股息率 / 10Y 国债收益率）
+# ---------------------------------------------------------------------------
+
+
+def get_index_dividend_yield(index_code: str = "000922") -> float | None:
+    """中证指数官网最新股息率（%，取 ``股息率1``），默认中证红利；失败 → None。
+
+    返回帧为倒序（新在前）且可能含 NaN，按日期升序取最后一个有效值。
+    """
+    raw = _call(ak.stock_zh_index_value_csindex, symbol=index_code)
+    if raw is None or raw.empty or "股息率1" not in raw.columns:
+        return None
+    frame = pd.DataFrame(
+        {
+            "date": pd.to_datetime(raw["日期"], errors="coerce"),
+            "value": pd.to_numeric(raw["股息率1"], errors="coerce"),
+        }
+    ).dropna(subset=["date", "value"])
+    if frame.empty:
+        return None
+    return float(frame.sort_values("date")["value"].iloc[-1])
+
+
+def get_10y_bond_yield(days: int = 90) -> float | None:
+    """中国 10 年期国债收益率最新值（%）；失败 → None。
+
+    只请求近 ``days`` 天（bond_zh_us_rate 默认拉取 1990 年至今，全量要 19 次请求）。
+    """
+    start = (date.today() - timedelta(days=days)).strftime("%Y%m%d")
+    raw = _call(ak.bond_zh_us_rate, start_date=start)
+    if raw is None or raw.empty or "中国国债收益率10年" not in raw.columns:
+        return None
+    values = pd.to_numeric(raw["中国国债收益率10年"], errors="coerce").dropna()
+    if values.empty:
+        return None
+    return float(values.iloc[-1])

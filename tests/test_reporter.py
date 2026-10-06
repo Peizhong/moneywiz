@@ -320,6 +320,42 @@ def test_high_and_middle_position_phrases():
     assert "120日" not in row  # 无 K 线数据时不显示位置
 
 
+MARKET = {
+    "dividend_yield": 4.14,
+    "bond_10y": 1.82,
+    "spread": 2.32,
+    "index_pe_position": 14.0,
+}
+
+
+def test_market_header_rendered_before_tables():
+    report = render_report([STOCK_80], [], OUTPUT_CFG, 1.0, market=MARKET)
+
+    assert "【板块温度计】" in report
+    assert "中证红利股息率 4.14%" in report
+    assert "10Y国债 1.82%" in report
+    assert "利差 +2.32pct" in report
+    assert "上证红利PE分位 14%" in report
+    assert report.index("【板块温度计】") < report.index(STOCK_HEADER)
+
+
+def test_market_header_absent_without_market():
+    report = render_report([STOCK_80], [], OUTPUT_CFG, 1.0)
+
+    assert "【板块温度计】" not in report
+
+
+def test_market_header_skips_missing_fields():
+    partial = dict(MARKET, bond_10y=None, spread=None, index_pe_position=None)
+    report = render_report([STOCK_80], [], OUTPUT_CFG, 1.0, market=partial)
+    assert "中证红利股息率 4.14%" in report
+    assert "10Y国债" not in report and "利差" not in report
+
+    empty = {key: None for key in MARKET}
+    report = render_report([STOCK_80], [], OUTPUT_CFG, 1.0, market=empty)
+    assert "【板块温度计】" not in report
+
+
 def test_detail_falls_back_to_label_without_value():
     from src.reporter import _detail_text
 
