@@ -507,6 +507,61 @@ def test_kline_after_successful_fallback_skips_eastmoney_for_rest_of_run(
     assert "已熔断" in caplog.text
 
 
+def _stub_tencent_kline(monkeypatch):
+    """腾讯 K 线打桩：只关心回退日志的测试不经过真实解析。"""
+    monkeypatch.setattr(
+        data,
+        "_tencent_kline",
+        lambda code, days: pd.DataFrame(
+            {"date": [pd.Timestamp("2026-09-30")], "close": [40.0], "volume": [1.0]}
+        ),
+    )
+
+
+def test_kline_fallback_notices_are_deduped_per_run(monkeypatch, caplog):
+    """熔断生效后同类回退提示每次运行只打一行，不再逐只刷屏。"""
+
+    def failing_hist(**kwargs):
+        raise ConnectionError("东财不可用")
+
+    monkeypatch.setattr(ak, "stock_zh_a_hist", failing_hist)
+    _stub_tencent_kline(monkeypatch)
+
+    with caplog.at_level(logging.INFO, logger="src.data"):
+        get_kline("600036", as_of=AS_OF)  # 首只：东财失败 → 熔断（warning 含代码）
+        get_kline("000001", as_of=AS_OF)  # 已熔断：info 只此一行
+        get_kline("000002", as_of=AS_OF)  # 同运行内第三只：静默
+
+    notices = [m for m in caplog.messages if "腾讯行情" in m]
+    assert len(notices) == 2  # warning（首只失败）+ info（首次熔断路径），各一条
+    assert "600036" in notices[0]
+    assert "000001" in notices[1]
+    assert "000002" not in caplog.text
+
+
+def test_breaker_notice_reappears_in_next_run(monkeypatch, tmp_path, caplog):
+    """reset_quote_source_state 清空去重集合：下一次运行重新允许提示一次。"""
+
+    def failing_hist(**kwargs):
+        raise ConnectionError("东财不可用")
+
+    monkeypatch.setattr(ak, "stock_zh_a_hist", failing_hist)
+    _stub_tencent_kline(monkeypatch)
+    data.configure_cache(tmp_path, ttl_hours=24)
+
+    get_kline("600036", as_of=AS_OF)  # 触发熔断并持久化
+    reset_quote_source_state()  # 模拟下一次运行：沿用持久化判定
+
+    with caplog.at_level(logging.INFO, logger="src.data"):
+        get_kline("000001", as_of=AS_OF)  # 新运行的首只 → 重新提示一次
+        get_kline("000002", as_of=AS_OF)  # 同运行第二只 → 静默
+
+    breaker_notices = [
+        m for m in caplog.messages if "已熔断" in m and "直接使用腾讯" in m
+    ]
+    assert len(breaker_notices) == 1  # 新一次运行重新提示，且仍只一条
+
+
 def test_spot_after_successful_fallback_uses_tencent_directly(monkeypatch):
     attempts = []
 

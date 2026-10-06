@@ -390,6 +390,24 @@ def _patch_sina(monkeypatch):
     return calls
 
 
+def test_sina_fallback_notice_logged_once_across_codes(monkeypatch, tmp_path, caplog):
+    """东财失败回退新浪的提示每次运行只打一行，不再逐只出现。"""
+    _patch_ak(monkeypatch, info_exc=ConnectionError("东财不可用"))
+    _patch_sina(monkeypatch)
+
+    with caplog.at_level(logging.INFO, logger="src.data"):
+        out_a = get_industry_pe_pb("600108", tmp_path)  # 首只：东财失败 → warning
+        out_b = get_industry_pe_pb("000001", tmp_path)  # 已熔断：info 只此一行
+        out_c = get_industry_pe_pb("600109", tmp_path)  # 同运行内第三只：静默
+
+    assert out_a is not None and out_b is not None and out_c is not None
+    notices = [m for m in caplog.messages if "回退新浪行业" in m]
+    assert len(notices) == 2  # warning（首只失败）+ info（首次熔断路径），各一条
+    assert "600108" in notices[0]
+    assert "000001" in notices[1]
+    assert "600109" not in caplog.text
+
+
 def test_sina_fallback_builds_table_and_returns_medians(monkeypatch, tmp_path):
     _patch_ak(monkeypatch, info_exc=ConnectionError("东财不可用"))
     calls = _patch_sina(monkeypatch)

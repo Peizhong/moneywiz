@@ -69,11 +69,24 @@ _eastmoney_quotes_down = False
 EASTMONEY_BREAKER_SECONDS = 30 * 60
 _BREAKER_CACHE_KEY = "state:eastmoney_quotes_down"
 
+# 同类回退提示每次运行只打一行（首条含标的代码）：熔断生效后逐只标的重复
+# 「已熔断…回退…」会刷屏；reset_quote_source_state() 时清空（每次运行重置）。
+_fallback_notices_logged: set[str] = set()
+
+
+def _log_fallback_once(key: str, level: int, message: str, *args) -> None:
+    """同一运行内同一 key 的回退提示只记录一次（每种消息一个 key）。"""
+    if key in _fallback_notices_logged:
+        return
+    _fallback_notices_logged.add(key)
+    logger.log(level, message, *args)
+
 
 def reset_quote_source_state() -> None:
     """重置熔断标记：若缓存中存在 30 分钟内的持久化判定则沿用，否则清空。"""
     global _eastmoney_quotes_down
     _eastmoney_quotes_down = _read_persisted_breaker()
+    _fallback_notices_logged.clear()
     if _eastmoney_quotes_down:
         logger.warning("沿用 %d 分钟内的判定：东财行情不可用，直接使用回退源", EASTMONEY_BREAKER_SECONDS // 60)
 
@@ -219,11 +232,19 @@ def _fetch_stock_spot(codes) -> pd.DataFrame | None:
         raw = _call(ak.stock_zh_a_spot_em)
         if raw is None:
             _mark_eastmoney_quotes_down()  # 行情集群失败即熔断（30 分钟内不重复重试）
+            _log_fallback_once(
+                "spot_fail_warning",
+                logging.WARNING,
+                "get_stock_spot 东财行情不可用，回退腾讯行情",
+            )
     else:
-        logger.info("东财行情已熔断，get_stock_spot 直接使用腾讯行情")
+        _log_fallback_once(
+            "spot_breaker_info",
+            logging.INFO,
+            "东财行情已熔断，get_stock_spot 直接使用腾讯行情",
+        )
         raw = None
     if raw is None:
-        logger.warning("get_stock_spot 东财行情不可用，回退腾讯行情")
         frame = _tencent_spot(codes)
         if frame is None:
             return None
@@ -313,11 +334,21 @@ def _fetch_kline(
         )
         if raw is None:
             _mark_eastmoney_quotes_down()  # 行情集群失败即熔断（30 分钟内不重复重试）
+            _log_fallback_once(
+                "kline_fail_warning",
+                logging.WARNING,
+                "get_kline(%s) 东财行情不可用，回退腾讯行情",
+                code,
+            )
     else:
-        logger.info("东财行情已熔断，get_kline(%s) 直接使用腾讯行情", code)
+        _log_fallback_once(
+            "kline_breaker_info",
+            logging.INFO,
+            "东财行情已熔断，get_kline(%s) 直接使用腾讯行情",
+            code,
+        )
         raw = None
     if raw is None:
-        logger.warning("get_kline(%s) 东财行情不可用，回退腾讯行情", code)
         return _tencent_kline(code, days)
     if raw.empty:
         return pd.DataFrame(columns=list(KLINE_COLUMNS))
@@ -443,26 +474,46 @@ def get_industry_pe_pb(
     industry = _cached_industry(cache, code, cache_days)
     if industry is None:
         if not _eastmoney_quotes_available():
-            logger.info("东财行情已熔断，get_industry_pe_pb(%s) 回退新浪行业", code)
+            _log_fallback_once(
+                "industry_breaker_info",
+                logging.INFO,
+                "东财行情已熔断，get_industry_pe_pb(%s) 回退新浪行业",
+                code,
+            )
             return _sina_industry_pe_pb(code, cache_dir, cache_days)
         raw = _call(ak.stock_individual_info_em, symbol=code)
         if raw is None:
             _mark_eastmoney_quotes_down()  # 行情集群失败即熔断（30 分钟内不重复重试）
         industry = _industry_from_info(raw)
         if industry is None:
-            logger.warning("get_industry_pe_pb(%s) 东财行业获取失败，回退新浪行业", code)
+            _log_fallback_once(
+                "industry_name_fail",
+                logging.WARNING,
+                "get_industry_pe_pb(%s) 东财行业获取失败，回退新浪行业",
+                code,
+            )
             return _sina_industry_pe_pb(code, cache_dir, cache_days)
         cache["stocks"][code] = {"industry": industry, "updated_at": stamp}
 
     medians = _cached_medians(cache, industry, cache_days)
     if medians is None:
         if not _eastmoney_quotes_available():
-            logger.info("东财行情已熔断，get_industry_pe_pb(%s) 回退新浪行业", code)
+            _log_fallback_once(
+                "industry_breaker_info",
+                logging.INFO,
+                "东财行情已熔断，get_industry_pe_pb(%s) 回退新浪行业",
+                code,
+            )
             return _sina_industry_pe_pb(code, cache_dir, cache_days)
         cons = _call(ak.stock_board_industry_cons_em, symbol=industry)
         if cons is None:
             _mark_eastmoney_quotes_down()  # 行情集群失败即熔断（30 分钟内不重复重试）
-            logger.warning("get_industry_pe_pb(%s) 东财行业中位数获取失败，回退新浪行业", code)
+            _log_fallback_once(
+                "industry_medians_fail",
+                logging.WARNING,
+                "get_industry_pe_pb(%s) 东财行业中位数获取失败，回退新浪行业",
+                code,
+            )
             return _sina_industry_pe_pb(code, cache_dir, cache_days)
         medians = {
             "pe": _positive_median(cons, "市盈率-动态"),
@@ -672,12 +723,22 @@ def _fetch_fund_quotes(fund_type: str, codes: list[str]) -> pd.DataFrame | None:
     if ak_name is None:
         return None
     if not _eastmoney_quotes_available():
-        logger.info("东财行情已熔断，get_fund_quotes(%s) 回退腾讯行情", fund_type)
+        _log_fallback_once(
+            "fund_breaker_info",
+            logging.INFO,
+            "东财行情已熔断，get_fund_quotes(%s) 回退腾讯行情",
+            fund_type,
+        )
         return _tencent_fund_quotes(codes)
     raw = _call(getattr(ak, ak_name))
     if raw is None:
         _mark_eastmoney_quotes_down()  # 行情集群失败即熔断（30 分钟内不重复重试）
-        logger.warning("get_fund_quotes(%s) 东财行情不可用，回退腾讯行情", fund_type)
+        _log_fallback_once(
+            "fund_fail_warning",
+            logging.WARNING,
+            "get_fund_quotes(%s) 东财行情不可用，回退腾讯行情",
+            fund_type,
+        )
         return _tencent_fund_quotes(codes)
     if raw.empty:
         return pd.DataFrame(columns=list(FUND_QUOTE_COLUMNS))

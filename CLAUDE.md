@@ -36,6 +36,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt -r requiremen
 - 东财 `push2*.eastmoney.com` 会按出口 IP 拒绝请求（海外实测：TLS 握手成功后连接被断）。东财失败时的回退链：股票行情/K线 → 腾讯（`qt.gtimg.cn`、`web.ifzq.gtimg.cn` 前复权）；ETF/LOF 行情 → 腾讯（价格；无 IOPV，折溢价退化为「最新净值」日频代理）；基金历史 → 单位净值走势（`fund_open_fund_info_em`）；**行业 PE/PB → 新浪行业板块**（成分股自带 `per`/`pb`，首次全量扫描约 1-2 分钟，见缓存分层）。东财已不是任何指标的必需源。
 - 东财任一行情调用失败 → 熔断 30 分钟（持久化），期间直接走回退源/按数据不足处理，不再重复重试。运行开始时 `reset_quote_source_state()` 读取持久化判定。
 - 熔断在源码里的名字：`src/data.py` 的 `_eastmoney_quotes_down`；跳过点分散在各取数函数（搜索「已熔断」）。
+- 回退提示一律经 `_log_fallback_once(key, level, msg, ...)`（每种消息一个 key）：熔断后逐只标的重复输出会刷屏，同类只保留首条（含首只代码），`reset_quote_source_state()` 时清空。新增回退日志不要用裸 `logger.*`。
 
 ### 缓存分层（改取数前必读）
 
