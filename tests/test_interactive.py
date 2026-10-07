@@ -48,6 +48,11 @@ class _StubQuestion:
             raise self._answer
         return self._answer
 
+    def unsafe_ask(self):
+        if isinstance(self._answer, BaseException):
+            raise self._answer
+        return self._answer
+
 
 def _patch_select(monkeypatch, answers):
     """替换交互式选择；返回每次提问时展示的选项标题列表（用于断言列表内容）。"""
@@ -59,6 +64,16 @@ def _patch_select(monkeypatch, answers):
 
     monkeypatch.setattr(interactive.questionary, "select", fake_select)
     return calls
+
+
+def _patch_pause(monkeypatch, answer=None):
+    """替换「按任意键返回」的暂停（默认：按了一下键）。"""
+    def fake_pause(message=None, **kwargs):
+        return _StubQuestion(answer)
+
+    monkeypatch.setattr(
+        interactive.questionary, "press_any_key_to_continue", fake_pause
+    )
 
 
 def test_enabled_follows_tty_and_flag(monkeypatch):
@@ -92,6 +107,7 @@ def test_session_prints_detail_of_chosen_stock_and_loops(monkeypatch, capsys):
 
     rows = ranked_rows(STOCKS, OUTPUT_CFG)
     calls = _patch_select(monkeypatch, [rows[1], None])
+    _patch_pause(monkeypatch)
 
     interactive.session(STOCKS, RULES, OUTPUT_CFG)
 
@@ -144,3 +160,56 @@ def test_enabled_is_false_without_questionary(monkeypatch, caplog):
         assert interactive.enabled() is False
 
     assert "questionary" in caplog.text and "pip install" in caplog.text
+
+
+def test_session_pauses_after_detail_until_keypress(monkeypatch):
+    """详情打印后必须等一次按键再回列表——否则列表立刻重绘，详情被顶出屏幕。"""
+    from src.reporter import ranked_rows
+
+    rows = ranked_rows(STOCKS, OUTPUT_CFG)
+    events = []
+
+    def fake_select(message, choices=None, **kwargs):
+        events.append("列表")
+        return _StubQuestion(rows[0] if events.count("列表") == 1 else None)
+
+    def fake_pause(message=None, **kwargs):
+        events.append("暂停")
+        return _StubQuestion(None)
+
+    monkeypatch.setattr(interactive.questionary, "select", fake_select)
+    monkeypatch.setattr(interactive.questionary, "press_any_key_to_continue", fake_pause)
+
+    interactive.session(STOCKS, RULES, OUTPUT_CFG)
+
+    assert events == ["列表", "暂停", "列表"]
+
+
+def test_session_exits_when_cancelled_at_pause(monkeypatch):
+    """在详情暂停处 Ctrl-C：结束会话，不再弹回列表。"""
+    from src.reporter import ranked_rows
+
+    rows = ranked_rows(STOCKS, OUTPUT_CFG)
+    calls = _patch_select(monkeypatch, [rows[0]])  # 只准备了一次列表答案
+    monkeypatch.setattr(
+        interactive.questionary,
+        "press_any_key_to_continue",
+        lambda *a, **k: _StubQuestion(KeyboardInterrupt()),
+    )
+
+    interactive.session(STOCKS, RULES, OUTPUT_CFG)
+
+    assert len(calls) == 1  # 没有回到列表（否则答案用尽会抛 IndexError）
+
+
+def test_session_ends_cleanly_when_pause_hits_eof(monkeypatch, capsys):
+    """暂停处拿到 EOF（非终端/输入关闭）→ 会话干净结束，不把异常抛给调用方。"""
+    from src.reporter import ranked_rows
+
+    rows = ranked_rows(STOCKS, OUTPUT_CFG)
+    _patch_select(monkeypatch, [rows[0]])
+    _patch_pause(monkeypatch, EOFError())
+
+    interactive.session(STOCKS, RULES, OUTPUT_CFG)  # 不抛异常
+
+    assert "股息率" in capsys.readouterr().out  # 详情已经打印出来了

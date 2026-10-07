@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 PROMPT = "选择要查看详情的股票"
 INSTRUCTION = "↑↓ 选择 · 输入即筛选 · 回车查看 · Ctrl-C/Ctrl-Q 退出"
+PAUSE_HINT = "读完按任意键返回列表 · Ctrl-C 退出"
 
 
 def enabled(no_interactive: bool = False) -> bool:
@@ -42,7 +43,10 @@ def enabled(no_interactive: bool = False) -> bool:
 
 
 def session(stock_results: list[dict], rules_section: dict, output_cfg: dict) -> None:
-    """选择循环：选中一只 → 打印其详情 → 回到列表，直到用户退出（Ctrl-C/Ctrl-Q）。"""
+    """选择循环：选中一只 → 打印详情 → 等一次按键 → 回列表，直到退出（Ctrl-C/Ctrl-Q）。
+
+    详情之后**必须**等一次按键：列表有几十行，一重绘就把详情顶出屏幕。
+    """
     rows = ranked_rows(stock_results, output_cfg)
     if not rows:
         return
@@ -53,6 +57,21 @@ def session(stock_results: list[dict], rules_section: dict, output_cfg: dict) ->
         print()
         print(render_detail(choice, rules_section))
         print()
+        if not _pause():
+            return
+
+
+def _pause() -> bool:
+    """等一次按键（读完详情再回列表）；用户中断（Ctrl-C/EOF）→ False。
+
+    走 ``unsafe_ask``：``ask()`` 会吞掉 KeyboardInterrupt 并同样返回 None，
+    那样就无法区分「按了任意键」与「用户要退出」。
+    """
+    try:
+        questionary.press_any_key_to_continue(PAUSE_HINT).unsafe_ask()
+        return True
+    except (KeyboardInterrupt, EOFError):
+        return False
 
 
 def _ask(rows: list[dict]):
