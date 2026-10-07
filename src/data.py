@@ -2,8 +2,9 @@
 
 对外只暴露归一化后的规范输出（下游 indicators/scorer 依赖）：
 
-- ``get_stock_spot()`` → 列 ``code, name, price, pe, pb``
-  （str, str, float, float, float；缺失值为 NaN，由下游组装 values 时转 None）。
+- ``get_stock_spot()`` → 列 ``code, name, price, pe, pb, market_cap``
+  （str, str, float, float, float, float；market_cap 为总市值，单位亿元，缺失值为
+  NaN，由下游组装 values 时转 None）。
 - ``get_kline(code, days=120, as_of=None)`` → 列 ``date, close``
   （datetime64，升序，float；已剔除收盘价 NaN 的行；最多 days 行）。
 - ``get_dividend_history(code)`` → 列 ``date, dividend_per_share``
@@ -44,7 +45,7 @@ from src.cache import DEFAULT_TTL_SECONDS, Cache
 
 logger = logging.getLogger(__name__)
 
-SPOT_COLUMNS = ("code", "name", "price", "pe", "pb")
+SPOT_COLUMNS = ("code", "name", "price", "pe", "pb", "market_cap")
 KLINE_COLUMNS = ("date", "close", "volume")
 DIVIDEND_COLUMNS = ("date", "dividend_per_share")
 PE_CACHE_FILENAME = "pe_cache.json"
@@ -215,18 +216,21 @@ def _num_or_none(value) -> float | None:
 
 
 def get_stock_spot(codes) -> pd.DataFrame | None:
-    """自选 A 股实时行情（东财主源 → 腾讯回退），归一为 ``code, name, price, pe, pb``。
+    """A 股实时行情（东财主源 → 腾讯回退），归一为
+    ``code, name, price, pe, pb, market_cap``（market_cap 单位：亿元）。
 
-    结果按 ``market_cache_hours``（默认 24 小时）缓存，键为自选代码集合。
+    结果按 ``market_cache_hours``（默认 24 小时）缓存，键为代码集合。
+    键带 ``v2`` 版本前缀：旧缓存是 5 列帧（无 market_cap），直接复用会让候选池
+    一只都排不出市值，故改版本号令其自然过期。
     """
     codes = list(codes)
     return _cached(
-        f"spot:{','.join(sorted(codes))}", lambda: _fetch_stock_spot(codes)
+        f"spot:v2:{','.join(sorted(codes))}", lambda: _fetch_stock_spot(codes)
     )
 
 
 def _fetch_stock_spot(codes) -> pd.DataFrame | None:
-    """自选 A 股实时行情，归一为 ``code, name, price, pe, pb`` 并只保留 codes。
+    """A 股实时行情，归一为 ``code, name, price, pe, pb, market_cap`` 并只保留 codes。
 
     主源东财 ``stock_zh_a_spot_em`` 全市场表（push2 对海外 IP 拒绝服务）；
     失败时回退腾讯 ``qt.gtimg.cn`` 批量行情（一次请求，覆盖沪/深/北交所）。
@@ -263,6 +267,8 @@ def _fetch_stock_spot(codes) -> pd.DataFrame | None:
                 "price": pd.to_numeric(raw["最新价"], errors="coerce"),
                 "pe": pd.to_numeric(raw["市盈率-动态"], errors="coerce"),
                 "pb": pd.to_numeric(raw["市净率"], errors="coerce"),
+                # 东财总市值单位为元，腾讯为亿元 → 统一换算成亿元
+                "market_cap": pd.to_numeric(raw["总市值"], errors="coerce") / 1e8,
             }
         )
     return frame[frame["code"].isin(codes)].reset_index(drop=True)
@@ -299,6 +305,7 @@ def _tencent_spot(codes: list[str]) -> pd.DataFrame | None:
             "price": _num_or_none(parts[3]),
             "pe": _num_or_none(parts[39]),
             "pb": _num_or_none(parts[46]),
+            "market_cap": _num_or_none(parts[45]),  # 已是亿元，无需换算
         }
         for code, parts in _tencent_quote_parts(text).items()
         if len(parts) >= 47

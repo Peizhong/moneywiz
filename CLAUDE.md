@@ -26,10 +26,11 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt -r requiremen
 
 `config/*.yaml` → `src/config.py` 校验 → `main.py` 编排 → 每只标的：`src/data.py` 取数 → `src/indicators.py` 纯计算 → `src/scorer.py` 加权 → `src/reporter.py` 渲染。
 
-- **src/data.py** — 唯一允许 `import akshare` 的模块。所有取数经 `_call()`（异常 → warning 含数据源名 + 重试 1 次 → None）。输出规范 schema（canonical 英文列）：行情 `code,name,price,pe,pb`；K线/净值 `date,close`；分红 `date,dividend_per_share`；指数PE `date,pe`。**失败返回 None；成功但无数据返回带列的空 DataFrame**——下游 indicators 依赖这个区分（None = 不可评分，空 = 值为 0）。
+- **src/data.py** — 唯一允许 `import akshare` 的模块。所有取数经 `_call()`（异常 → warning 含数据源名 + 重试 1 次 → None）。输出规范 schema（canonical 英文列）：行情 `code,name,price,pe,pb,market_cap`（market_cap 为总市值、单位**亿元**：东财源是元需 `/1e8`，腾讯源本就是亿元；spot 缓存键带 `v2` 前缀，改 schema 时须连带升版本，否则旧帧缺列会被当成「市值全缺失」）；K线/净值 `date,close`；分红 `date,dividend_per_share`；指数PE `date,pe`。**失败返回 None；成功但无数据返回带列的空 DataFrame**——下游 indicators 依赖这个区分（None = 不可评分，空 = 值为 0）。
 - **src/scorer.py** — 指标名 → 档位函数的注册表（higher-better / two-sided / sweet-band / range / min 五类，档位 1.0/0.5/0.0）。缺失指标剔除后按剩余权重归一化 `total = Σ(score×w)/Σw×100`，全缺 → None。未知指标名告警并按不可评分处理。
 - **src/reporter.py** — 消费 result dict 契约 `{code,name,total,values,scores,missing,tech,position,sustainability,turnover_wan,new_constituent}`。同分竞赛排名（显示 `1(并列6)`）、覆盖列（已评分/应有）、亮点/风险带数值、120 日位置短语、可持续性警示、板块温度计首行、`(新增)` 成分股标记。
 - **src/constituents.py** — 多指数成分股定期刷新：`config/dividend_index.yaml` 是 `indices` 列表，每个指数独立 `updated_at`；过期（`index_refresh_days`，默认 14 天）→ 从中证指数官网拉取 → 新成员写 `added` 字段并可标注、调出移除、**单指数失败沿用其旧名单**（不写时间戳，下轮重试），文件按当前内容整体重写。
+- **main.py 的候选池裁剪** — `_select_constituents()` 在逐股取数**之前**把成分股裁到 `data.candidate_top_n` 名（rules.yaml，默认 0 = 不筛）：各指数条目按代码去重 → 按 `market_cap`（总市值，亿元）降序取前 N → 合并自选（自选不参与筛选、不占名额）。裁剪只决定入选、不重排输出。**个股取不到市值按严格口径剔除并在日志列出代码；但 `limit<=0`、行情整表不可用（None/空帧/缺 `market_cap` 列）、或一只候选都排不出市值时不筛**（否则名单会被丢光、报告近乎空白）——改动这里的失败分支前先想清楚这条。
 
 ### 数据源回退与熔断（重要）
 
@@ -56,7 +57,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt -r requiremen
 - **测试绝不联网**：conftest 的 `_no_real_network` 会默认把 `src.data.requests.get` 打桩为失败——任何未打桩的回退路径都会直接报错而不是真实联网；`ak.*`、`src.constituents.refresh_indices`（main 测试经 `_patch_data`）仍需各自 monkeypatch。fixture 使用真实上游的列名与字段位置（参见 `QUOTES_TEXT`/`KLINE_JSON` 的腾讯报文）。
 - `tests/conftest.py` 的 autouse fixture 每个测试前后重置 data 层运行时状态（熔断标记 + 取数缓存）——新增模块级状态时要同步加入。
 - main 级测试把自选/规则/成分股写进 `tmp_path` 的临时 config 目录（fixture `config_dir`）；**不得依赖仓库 `config/` 的内容**（那是用户随时会改的数据，断言内容会让测试在正常使用中变红）。
-- 性能基准（当前 3 个指数 ≈132 只标的）：冷启动 ~6 分钟（行业 PE 走新浪回退时全量扫描最慢）；暖缓存 ~2 秒（24h 缓存 + 持久化熔断生效）。
+- 性能基准（当前 3 个指数去重 130 只，rules.yaml `candidate_top_n: 80` 裁到 80 只后扫描；未裁剪时约 6 分钟）：冷启动数分钟（行业 PE 走新浪回退时全量扫描最慢）；暖缓存 ~2 秒（24h 缓存 + 持久化熔断生效）。
 
 ## Conventions
 

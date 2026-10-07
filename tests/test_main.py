@@ -336,6 +336,193 @@ def test_run_merges_constituents_and_marks_new(monkeypatch, config_dir, tmp_path
     assert report.count("平安银行") == 1
 
 
+def _write_rules(config_dir, **data_overrides):
+    """覆盖 tmp 配置目录里的 rules.yaml（如 data.candidate_top_n）。"""
+    rules = {
+        **RULES_CONFIG,
+        "data": {**RULES_CONFIG["data"], **data_overrides},
+    }
+    (config_dir / "rules.yaml").write_text(
+        yaml.safe_dump(rules, allow_unicode=True, sort_keys=False), encoding="utf-8"
+    )
+
+
+def _spot_with_cap(caps: dict):
+    """带 market_cap（亿元）的规范行情帧；值为 None 表示该股取不到市值。"""
+    codes = list(caps)
+    return pd.DataFrame(
+        {
+            "code": codes,
+            "name": codes,
+            "price": [1.0] * len(codes),
+            "pe": [1.0] * len(codes),
+            "pb": [1.0] * len(codes),
+            "market_cap": [caps[code] for code in codes],
+        }
+    )
+
+
+POOL = [
+    {"code": "600036", "name": "招商银行"},  # 10405.71 亿
+    {"code": "000001", "name": "平安银行"},  # 2245.26 亿
+    {"code": "601088", "name": "中国神华"},  # 8000.00 亿
+    {"code": "920002", "name": "万达轴承"},  # 33.09 亿
+]
+POOL_CAPS = {"600036": 10405.71, "000001": 2245.26, "601088": 8000.0, "920002": 33.09}
+
+
+def test_select_constituents_keeps_highest_market_cap():
+    out = main._select_constituents(POOL, _spot_with_cap(POOL_CAPS), limit=2)
+
+    # 入选按市值排序决定，输出保持名单原顺序
+    assert [entry["code"] for entry in out["kept"]] == ["600036", "601088"]
+    assert out["unranked"] == []
+    assert out["threshold"] == pytest.approx(8000.0)  # 入选末位的总市值（亿元）
+
+
+def test_select_constituents_limit_zero_keeps_all():
+    out = main._select_constituents(POOL, _spot_with_cap(POOL_CAPS), limit=0)
+
+    assert [entry["code"] for entry in out["kept"]] == [e["code"] for e in POOL]
+    assert out["threshold"] is None
+
+
+def test_select_constituents_drops_entries_without_market_cap():
+    """严格口径：取不到市值的成分股不占名额、也不保留，单独列为 unranked。"""
+    caps = {**POOL_CAPS, "000001": None}  # 平安银行市值为缺失
+    spot = _spot_with_cap(caps).drop(index=0)  # 且招商银行不在行情表中
+
+    out = main._select_constituents(POOL, spot, limit=2)
+
+    assert [entry["code"] for entry in out["kept"]] == ["601088", "920002"]
+    assert out["unranked"] == ["600036", "000001"]
+
+
+def test_select_constituents_dedupes_codes_shared_by_indices():
+    """同一只股票进入多个指数（合并名单里有重复条目）只占一个名额。"""
+    entries = [
+        {"code": "601088", "name": "中国神华"},
+        {"code": "600028", "name": "中国石化"},
+        {"code": "601088", "name": "中国神华"},  # 另一指数的同一条
+        {"code": "600123", "name": "兰花科创"},
+    ]
+    spot = _spot_with_cap({"601088": 10367.55, "600028": 5000.0, "600123": 100.0})
+
+    out = main._select_constituents(entries, spot, limit=2)
+
+    assert [entry["code"] for entry in out["kept"]] == ["601088", "600028"]
+
+
+def test_select_constituents_when_no_entry_has_market_cap_keeps_all():
+    """一只也排不出市值（如行情表里没有这些代码）→ 等同整表不可用，不筛。"""
+    spot = _spot_with_cap({"600036": None, "000001": None})
+
+    out = main._select_constituents(POOL, spot, limit=2)
+
+    assert [entry["code"] for entry in out["kept"]] == [e["code"] for e in POOL]
+    assert out["threshold"] is None
+    assert out["unranked"] == ["600036", "000001", "601088", "920002"]  # 全部缺市值
+
+
+@pytest.mark.parametrize("spot", [None, pd.DataFrame()])
+def test_select_constituents_without_spot_table_keeps_all(spot):
+    """整表不可用 → 本轮不筛（否则一只都排不出市值，名单会被丢光）。"""
+    out = main._select_constituents(POOL, spot, limit=2)
+
+    assert [entry["code"] for entry in out["kept"]] == [e["code"] for e in POOL]
+    assert out["threshold"] is None
+
+
+def test_select_constituents_without_market_cap_column_keeps_all():
+    """行情帧缺 market_cap 列（如旧 schema）同样按「整表不可用」处理。"""
+    out = main._select_constituents(POOL, SPOT, limit=2)
+
+    assert len(out["kept"]) == len(POOL)
+    assert out["threshold"] is None
+
+
+def test_run_trims_constituent_pool_by_market_cap(
+    monkeypatch, config_dir, tmp_path, caplog
+):
+    """候选池在逐股取数前裁到前 N：被筛掉的成分股不进入取数与报告，自选不受影响。"""
+    entries = [
+        {"code": "601088", "name": "中国神华"},  # 8000 亿 → 入选
+        {"code": "600028", "name": "中国石化"},  # 7000 亿 → 出局
+        {"code": "600123", "name": "兰花科创"},  # 100 亿 → 出局
+        {"code": "601088", "name": "中国神华"},  # 另一指数的同一条：不重复占名额
+    ]
+    _write_rules(config_dir, candidate_top_n=1)
+    kline_calls = []
+
+    def kline(code, days=120, as_of=None):
+        kline_calls.append(code)
+        return _kline([10.0] * 60)
+
+    spot = _spot_with_cap(
+        {
+            STOCK_A: 2245.26,
+            STOCK_B: 10405.71,
+            "601088": 8000.0,
+            "600028": 7000.0,
+            "600123": 100.0,
+        }
+    )
+    _patch_data(
+        monkeypatch,
+        constituents_result=entries,
+        **_happy_overrides(get_stock_spot=lambda codes: spot, get_kline=kline),
+    )
+
+    with caplog.at_level(logging.INFO):
+        report = main.run(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
+
+    assert "中国神华" in report
+    assert "600028" not in report and "600123" not in report  # 被筛掉的成分股不进报告
+    assert "600028" not in kline_calls  # 也没触发逐股取数
+    assert "平安银行" in report and "招商银行" in report  # 自选不参与筛选
+    assert "候选池按总市值取前 1：成分股 3 → 1（门槛 8000 亿）" in caplog.text
+
+
+def test_run_warns_when_candidate_market_cap_missing(
+    monkeypatch, config_dir, tmp_path, caplog
+):
+    """个股取不到市值 → 按严格口径剔除，并告警列出代码。"""
+    entries = [
+        {"code": "601088", "name": "中国神华"},
+        {"code": "600028", "name": "中国石化"},
+    ]
+    _write_rules(config_dir, candidate_top_n=1)
+    spot = _spot_with_cap({STOCK_A: 2245.26, STOCK_B: 10405.71, "601088": 8000.0})
+
+    _patch_data(
+        monkeypatch, constituents_result=entries, **_happy_overrides(get_stock_spot=lambda codes: spot)
+    )
+
+    with caplog.at_level(logging.WARNING):
+        report = main.run(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
+
+    assert "600028" not in report
+    assert "600028" in caplog.text and "市值缺失" in caplog.text
+
+
+def test_run_skips_trim_when_spot_table_unavailable(
+    monkeypatch, config_dir, tmp_path, caplog
+):
+    """整表不可用 → 本轮不筛：全部成分股照常进入扫描，并打一条显眼告警。"""
+    entries = [
+        {"code": "601088", "name": "中国神华"},
+        {"code": "600028", "name": "中国石化"},
+    ]
+    _write_rules(config_dir, candidate_top_n=1)
+    _patch_data(monkeypatch, constituents_result=entries, **_happy_overrides(get_stock_spot=lambda codes: None))
+
+    with caplog.at_level(logging.WARNING):
+        report = main.run(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
+
+    assert "中国神华" in report and "中国石化" in report
+    assert "本轮不做市值筛选" in caplog.text
+
+
 def test_run_omits_marker_for_old_constituents(monkeypatch, config_dir, tmp_path):
     entries = [
         {"code": "601088", "name": "中国神华", "added": "2026-01-01"},  # 早已加入

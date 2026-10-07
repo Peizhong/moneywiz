@@ -26,7 +26,10 @@ AS_OF = date(2026, 10, 6)
 
 
 def _spot_frame():
-    """stock_zh_a_spot_em() 原始列名的最小帧："-" 与 None 均为缺失。"""
+    """stock_zh_a_spot_em() 原始列名的最小帧："-" 与 None 均为缺失。
+
+    东财的「总市值」单位为元（与腾讯的亿元不同），取数层负责换算。
+    """
     return pd.DataFrame(
         {
             "代码": ["600036", "000001"],
@@ -34,6 +37,7 @@ def _spot_frame():
             "最新价": [40.0, 11.5],
             "市盈率-动态": ["-", 5.2],
             "市净率": [None, 0.7],
+            "总市值": ["-", 224526000000.0],
         }
     )
 
@@ -96,7 +100,7 @@ def test_spot_normalizes_columns_and_missing_values(monkeypatch):
 
     out = get_stock_spot(["600036", "000001"])
 
-    assert list(out.columns) == ["code", "name", "price", "pe", "pb"]
+    assert list(out.columns) == ["code", "name", "price", "pe", "pb", "market_cap"]
     assert out.loc[0, "code"] == "600036"
     assert out.loc[1, "code"] == "000001"  # 代码保持字符串，不丢前导零
     assert out.loc[0, "name"] == "招商银行"
@@ -107,13 +111,23 @@ def test_spot_normalizes_columns_and_missing_values(monkeypatch):
     assert out.loc[1, "pb"] == pytest.approx(0.7)
 
 
+def test_spot_market_cap_converts_yuan_to_yi(monkeypatch):
+    """东财「总市值」单位为元，统一换算成亿元（与腾讯口径一致）。"""
+    monkeypatch.setattr(ak, "stock_zh_a_spot_em", lambda: _spot_frame())
+
+    out = get_stock_spot(["600036", "000001"]).set_index("code")
+
+    assert out.loc["000001", "market_cap"] == pytest.approx(2245.26)
+    assert pd.isna(out.loc["600036", "market_cap"])  # "-" → 缺失
+
+
 def test_spot_empty_source_returns_empty_frame_with_columns(monkeypatch):
     monkeypatch.setattr(ak, "stock_zh_a_spot_em", lambda: pd.DataFrame())
 
     out = get_stock_spot(["600036"])
 
     assert out is not None and out.empty
-    assert list(out.columns) == ["code", "name", "price", "pe", "pb"]
+    assert list(out.columns) == ["code", "name", "price", "pe", "pb", "market_cap"]
 
 
 # ---------------------------------------------------------------------------
@@ -321,15 +335,19 @@ def test_spot_falls_back_to_tencent_when_eastmoney_fails(monkeypatch, caplog):
     with caplog.at_level(logging.WARNING):
         out = get_stock_spot(["600036", "000001", "920002"])
 
-    assert list(out.columns) == ["code", "name", "price", "pe", "pb"]
+    assert list(out.columns) == ["code", "name", "price", "pe", "pb", "market_cap"]
     by_code = out.set_index("code")
     assert by_code.loc["600036", "name"] == "招商银行"
     assert by_code.loc["600036", "price"] == pytest.approx(41.26)
     assert by_code.loc["600036", "pe"] == pytest.approx(6.86)
     assert by_code.loc["600036", "pb"] == pytest.approx(0.91)
+    # 腾讯总市值字段本身就是亿元，直接取值
+    assert by_code.loc["600036", "market_cap"] == pytest.approx(10405.71)
     assert by_code.loc["000001", "pe"] == pytest.approx(5.17)  # 深市字段位置一致
     assert by_code.loc["000001", "pb"] == pytest.approx(0.48)
+    assert by_code.loc["000001", "market_cap"] == pytest.approx(2245.26)
     assert by_code.loc["920002", "name"] == "万达轴承"  # 北交所（bj 前缀）
+    assert by_code.loc["920002", "market_cap"] == pytest.approx(33.09)
     assert len(calls) == 1  # 一次批量请求
     assert "sh600036" in calls[0]["url"] and "sz000001" in calls[0]["url"]
     assert "回退腾讯" in caplog.text
@@ -364,8 +382,28 @@ def test_spot_all_codes_unknown_returns_empty_frame_without_request(monkeypatch)
     out = get_stock_spot(["200001"])
 
     assert out is not None and out.empty
-    assert list(out.columns) == ["code", "name", "price", "pe", "pb"]
+    assert list(out.columns) == ["code", "name", "price", "pe", "pb", "market_cap"]
     assert calls == []
+
+
+def test_spot_ignores_legacy_cache_entry_without_market_cap(monkeypatch, tmp_path):
+    """旧 schema（无 market_cap 列）的行情缓存不得复用——否则候选池会一只都排不出市值。"""
+    monkeypatch.setattr(ak, "stock_zh_a_spot_em", lambda: _spot_frame())
+    data.configure_cache(tmp_path, ttl_hours=24)
+    legacy = pd.DataFrame(
+        {
+            "code": ["600036"],
+            "name": ["招商银行"],
+            "price": [40.0],
+            "pe": [6.86],
+            "pb": [0.91],
+        }
+    )
+    Cache(tmp_path / "market_cache.db").set("spot:600036", legacy)
+
+    out = get_stock_spot(["600036"])
+
+    assert list(out.columns) == ["code", "name", "price", "pe", "pb", "market_cap"]
 
 
 def test_spot_both_sources_fail_returns_none(monkeypatch):

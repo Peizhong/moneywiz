@@ -87,6 +87,93 @@ def _spot_row(spot, code):
     return None if matched.empty else matched.iloc[0]
 
 
+def _market_cap(spot, code):
+    """行情表中该代码的总市值（亿元）；表缺失、无该行或值为空 → None。"""
+    row = _spot_row(spot, code)
+    return _num(row["market_cap"]) if row is not None else None
+
+
+def _dedupe_by_code(entries: list[dict]) -> list[dict]:
+    """按代码去重（保留首次出现的条目）：同一只股票可同时属于多个红利指数。"""
+    seen: set[str] = set()
+    unique: list[dict] = []
+    for entry in entries:
+        code = str(entry.get("code") or "")
+        if code not in seen:
+            seen.add(code)
+            unique.append(entry)
+    return unique
+
+
+def _unfiltered(entries: list[dict], unranked=()) -> dict:
+    """不筛的结果：原样保留，``threshold`` 为 None（调用方据此走告警分支）。"""
+    return {
+        "candidates": len(entries),
+        "kept": list(entries),
+        "unranked": list(unranked),
+        "threshold": None,
+        "filtered": False,
+    }
+
+
+def _select_constituents(entries: list[dict], spot, limit: int) -> dict:
+    """候选池裁剪：各指数成分股合并去重后，按总市值取前 ``limit`` 名（不影响自选）。
+
+    ``limit <= 0``、行情整表不可用（None/空帧/缺 market_cap 列）、或一只候选都排不出
+    市值时**不筛**：这几种情况下严格口径会把名单丢光、报告近乎空白。个股取不到市值
+    则按严格口径剔除，代码列入 ``unranked`` 由调用方告警。
+
+    返回 ``{"candidates", "kept", "unranked", "threshold", "filtered"}``：
+    ``candidates`` 为去重后的候选数，``kept`` 是入选条目并保持名单原顺序（市值只决定
+    入选，不重排输出），``threshold`` 为入选末位的总市值（亿元），``unranked`` 为
+    市值缺失、被剔除的代码。
+    """
+    entries = _dedupe_by_code(entries)
+    usable = spot is not None and not spot.empty and "market_cap" in spot.columns
+    if limit <= 0 or not entries or not usable:
+        return _unfiltered(entries)
+
+    ranked, missing = [], []
+    for entry in entries:
+        cap = _market_cap(spot, entry["code"])
+        (ranked if cap is not None else missing).append((cap, entry))
+    if not ranked:
+        return _unfiltered(entries, [entry["code"] for _cap, entry in missing])
+    ranked.sort(key=lambda pair: pair[0], reverse=True)
+
+    admitted = {entry["code"] for _cap, entry in ranked[:limit]}
+    return {
+        "candidates": len(entries),
+        "kept": [entry for entry in entries if entry["code"] in admitted],
+        "unranked": [entry["code"] for _cap, entry in missing],
+        "threshold": min(cap for cap, _entry in ranked[:limit]),
+        "filtered": True,
+    }
+
+
+def _log_candidate_selection(selection: dict, limit: int) -> None:
+    """裁剪结果落日志；整表不可用时打显眼告警（本轮不筛）。"""
+    if selection["filtered"]:
+        logger.info(
+            "候选池按总市值取前 %d：成分股 %d → %d（门槛 %.0f 亿）",
+            limit,
+            selection["candidates"],
+            len(selection["kept"]),
+            selection["threshold"],
+        )
+    elif limit > 0 and selection["candidates"]:
+        logger.warning(
+            "行情不可用，本轮不做市值筛选（成分股 %d 只照常扫描）",
+            selection["candidates"],
+        )
+    if selection["unranked"]:
+        logger.warning(
+            "候选池剔除市值缺失的 %d 只：%s",
+            len(selection["unranked"]),
+            "、".join(selection["unranked"]),
+        )
+
+
 def _quote_row(quotes, code):
     """基金行情表中该代码的行；表缺失、为空或无该行 → None。"""
     if quotes is None or quotes.empty:
@@ -349,12 +436,18 @@ def run(
     if refresh["error"]:
         logger.warning("成分股刷新失败（%s），沿用现有名单", refresh["error"])
     new_codes = constituents.new_constituent_codes(refresh["constituents"], refresh_days)
-    scan_stocks = _scan_stocks(cfg.stocks, refresh["constituents"])
-
+    # 先按全量候选取行情（一次批量请求），据总市值把成分股裁到前 N，
+    # 再跑逐股取数——裁剪省下的是最贵的部分。
+    all_stocks = _scan_stocks(cfg.stocks, refresh["constituents"])
     spot = _fetch(
-        lambda: data.get_stock_spot([stock.code for stock in scan_stocks]),
+        lambda: data.get_stock_spot([stock.code for stock in all_stocks]),
         "get_stock_spot",
     )
+    selection = _select_constituents(
+        refresh["constituents"], spot, cfg.rules["data"]["candidate_top_n"]
+    )
+    _log_candidate_selection(selection, cfg.rules["data"]["candidate_top_n"])
+    scan_stocks = _scan_stocks(cfg.stocks, selection["kept"])
     fund_quotes = _fetch_fund_quotes(cfg.funds)
     market = _market_context()
 

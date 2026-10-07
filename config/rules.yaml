@@ -70,6 +70,8 @@ data:
   financial_cache_days: 30   # 年报可持续性数据的缓存天数（季度更新）
   index_refresh_days: 14     # 成分股（dividend_index.yaml）超过该天数自动刷新
   market_cache_hours: 24     # 行情/分红/净值类取数的通用缓存时长（小时），期内不再请求上游
+  candidate_top_n: 80        # 候选池：三个指数成分股合并去重后按总市值取前 N（0 = 不筛）；
+                             # 取不到市值的成分股按严格口径剔除并告警，行情整表不可用则本轮不筛
 
 # 输出参数
 output:
