@@ -109,6 +109,24 @@ def normalize(indicator: str, value: float | None, thresholds: dict) -> float | 
     return tier(value, thresholds)
 
 
+def _tier_rows(
+    values: dict[str, float | None], rules_section: dict
+) -> list[dict]:
+    """逐指标求档位分（保持 rules 里的顺序）：``{name, value, score, weight}``。
+
+    只调用一次 ``normalize``（未知指标只告警一次），供总分与明细共用。
+    """
+    return [
+        {
+            "name": name,
+            "value": values.get(name),
+            "score": normalize(name, values.get(name), spec["thresholds"]),
+            "weight": spec["weight"],
+        }
+        for name, spec in rules_section["indicators"].items()
+    ]
+
+
 def score_instrument(
     values: dict[str, float | None], rules_section: dict
 ) -> dict:
@@ -120,21 +138,42 @@ def score_instrument(
     总分 = Σ(分×权重) / Σ(已评分权重) × 100（保留 1 位小数），
     无任何可评分指标时 total 为 None。
     """
-    scores: dict[str, float] = {}
-    missing: list[str] = []
-    weighted = 0.0
-    scored_weight = 0
-    for name, spec in rules_section["indicators"].items():
-        score = normalize(name, values.get(name), spec["thresholds"])
-        if score is None:
-            missing.append(name)
-            continue
-        scores[name] = score
-        weighted += score * spec["weight"]
-        scored_weight += spec["weight"]
+    rows = _tier_rows(values, rules_section)
+    scored = [row for row in rows if row["score"] is not None]
+    scored_weight = sum(row["weight"] for row in scored)
+    total = (
+        round(sum(row["score"] * row["weight"] for row in scored) / scored_weight * 100, 1)
+        if scored_weight
+        else None
+    )
+    return {
+        "scores": {row["name"]: row["score"] for row in scored},
+        "total": total,
+        "missing": [row["name"] for row in rows if row["score"] is None],
+    }
 
-    total = round(weighted / scored_weight * 100, 1) if scored_weight else None
-    return {"scores": scores, "total": total, "missing": missing}
+
+def score_breakdown(
+    values: dict[str, float | None], rules_section: dict
+) -> list[dict]:
+    """逐指标明细（交互式详情用）：档位分、权重与对总分的贡献。
+
+    每行 ``{"name", "value", "score", "weight", "contribution"}``；不可评分的指标
+    仍是单独一行（``score``/``contribution`` 为 None，便于展示"缺了什么"），且不进入
+    贡献的归一化分母。``contribution = score × weight / Σ(已评分权重) × 100``，
+    **不取整**（展示层再格式化），因此各行 contribution 之和 = ``score_instrument``
+    的扣分前总分。
+    """
+    rows = _tier_rows(values, rules_section)
+    scored_weight = sum(row["weight"] for row in rows if row["score"] is not None)
+    for row in rows:
+        score = row["score"]
+        row["contribution"] = (
+            score * row["weight"] / scored_weight * 100
+            if score is not None and scored_weight
+            else None
+        )
+    return rows
 
 
 def apply_sustainability_penalty(

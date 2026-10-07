@@ -12,6 +12,8 @@ import pandas as pd
 import pytest
 import yaml
 
+import sys
+
 import main
 from src import config, constituents, data
 
@@ -889,22 +891,95 @@ def test_run_list_valued_index_degrades_instead_of_aborting(monkeypatch, tmp_pat
     assert "平安银行" in report  # 股票不受基金配置问题影响
 
 
-def test_main_prints_report_and_returns_zero(monkeypatch, capsys):
-    monkeypatch.setattr(main, "run", lambda: "扫描 0 只标的")
+SCAN_STUB = {
+    "report": "扫描 0 只标的",
+    "stock_results": [],
+    "rules": {"stocks": {"indicators": {}}},
+    "output": {"buy_top_n": 5, "avoid_bottom_n": 5},
+}
 
-    assert main.main() == 0
+
+def _patch_scan(monkeypatch, **overrides):
+    monkeypatch.setattr(main, "run_scan", lambda *a, **k: {**SCAN_STUB, **overrides})
+
+
+class _FakeStdout:
+    """够用的 stdout 替身：可指定是否为 TTY 并收集输出。"""
+
+    def __init__(self, tty):
+        self._tty = tty
+        self.text = ""
+
+    def isatty(self):
+        return self._tty
+
+    def write(self, text):
+        self.text += text
+
+    def flush(self):
+        pass
+
+
+def test_run_returns_report_text(monkeypatch):
+    """run() 仍是「返回报告字符串」的入口（交互式所需数据由 run_scan 提供）。"""
+    _patch_scan(monkeypatch)
+
+    assert main.run() == "扫描 0 只标的"
+
+
+def test_main_prints_report_and_returns_zero(monkeypatch, capsys):
+    _patch_scan(monkeypatch)
+
+    assert main.main([]) == 0
 
     captured = capsys.readouterr()
     assert "扫描 0 只标的" in captured.out
 
 
+def test_main_enters_interactive_session_on_tty(monkeypatch):
+    _patch_scan(monkeypatch, stock_results=[{"code": "600036"}])
+    fake_stdout = _FakeStdout(tty=True)
+    monkeypatch.setattr(sys, "stdout", fake_stdout)
+    calls = []
+    monkeypatch.setattr(
+        main.interactive, "session", lambda *args: calls.append(args)
+    )
+
+    assert main.main([]) == 0
+
+    assert "扫描 0 只标的" in fake_stdout.text
+    assert calls == [([{"code": "600036"}], {"indicators": {}}, SCAN_STUB["output"])]
+
+
+def test_main_skips_interactive_without_tty(monkeypatch):
+    _patch_scan(monkeypatch)
+    monkeypatch.setattr(sys, "stdout", _FakeStdout(tty=False))
+    calls = []
+    monkeypatch.setattr(main.interactive, "session", lambda *args: calls.append(args))
+
+    main.main([])
+
+    assert calls == []  # 管道/重定向/Docker 下不阻塞
+
+
+def test_main_no_interactive_flag_skips_session(monkeypatch):
+    _patch_scan(monkeypatch)
+    monkeypatch.setattr(sys, "stdout", _FakeStdout(tty=True))
+    calls = []
+    monkeypatch.setattr(main.interactive, "session", lambda *args: calls.append(args))
+
+    main.main(["--no-interactive"])
+
+    assert calls == []
+
+
 def test_main_reports_config_error_and_returns_one(monkeypatch, capsys):
-    def failing_run():
+    def failing_scan():
         raise config.ConfigError("stocks.yaml: 配置文件不存在")
 
-    monkeypatch.setattr(main, "run", failing_run)
+    monkeypatch.setattr(main, "run_scan", failing_scan)
 
-    assert main.main() == 1
+    assert main.main([]) == 1
 
     captured = capsys.readouterr()
     assert "stocks.yaml: 配置文件不存在" in captured.err

@@ -627,3 +627,137 @@ def test_detail_falls_back_to_label_without_value():
     # 未知指标名与非法数值都不抛异常
     assert _detail_text({"custom_x": 1.0}, {"custom_x": 3}, 1.0) == "custom_x"
     assert _detail_text({"fund_size": 1.0}, {"fund_size": "n/a"}, 1.0) == "基金规模"
+
+
+# ---------------------------------------------------------------------------
+# 交互式详情（ranked_rows / row_label / render_detail）
+# ---------------------------------------------------------------------------
+
+DETAIL_RULES = {
+    "indicators": {
+        "dividend_yield": {"weight": 60, "thresholds": {"high": 4.0, "mid": 2.0}},
+        "dividend_years": {"weight": 40, "thresholds": {"high": 5, "mid": 3}},
+    },
+    "sustainability": {
+        "eps_decline_penalty": 10,
+        "negative_cash_penalty": 15,
+        "cash_cover_penalty": 10,
+        "max_penalty": 30,
+    },
+}
+
+# 股息率 5.0%（满分档 1.0）× 60 + 连续分红 3 年（0.5 档）× 40
+# → 加权小计 80.0；盈利下滑 → 扣 10% → 总分 72.0
+DETAIL_ITEM = {
+    "code": "600036",
+    "name": "招商银行",
+    "total": 72.0,
+    "values": {"dividend_yield": 5.0, "dividend_years": 3},
+    "scores": {"dividend_yield": 1.0, "dividend_years": 0.5},
+    "missing": [],
+    "tech": {"macd": "金叉", "rsi": 56.0},
+    "position": 45.0,
+    "turnover_wan": 80000.0,
+    "sustainability": {
+        "eps_growth": -5.0,
+        "eps_period": "2026-06-30",
+        "op_cash_per_share": 2.0,
+        "cash_cover": 50.0,
+    },
+}
+DETAIL_ROW = {"item": DETAIL_ITEM, "rank": 1, "tied_count": 1, "signal": "买入"}
+
+
+def _detail_line(text, needle):
+    """详情表里包含 needle 的指标行（排除结尾的「缺失指标」汇总行）。"""
+    matches = [
+        line
+        for line in text.splitlines()
+        if needle in line and not line.startswith("缺失指标")
+    ]
+    assert len(matches) == 1, f"{needle!r} 在详情里出现 {len(matches)} 次"
+    return matches[0]
+
+
+def test_ranked_rows_carry_rank_and_signal():
+    from src.reporter import ranked_rows
+
+    rows = ranked_rows([STOCK_80, STOCK_40, STOCK_NONE], OUTPUT_CFG)
+
+    assert [row["item"]["code"] for row in rows] == ["600036", "000001", "600000"]
+    assert rows[0]["rank"] == 1 and rows[0]["signal"] == "买入"
+    assert rows[-1]["signal"] == "数据不足"  # 总分 None 的标的
+    assert rows[-1]["tied_count"] == 1
+
+
+def test_ranked_rows_share_tie_group():
+    from src.reporter import ranked_rows
+
+    first = _result("600036", "招商银行", 80.0, scores={"dividend_yield": 1.0})
+    second = _result("000001", "平安银行", 80.0, scores={"dividend_yield": 1.0})
+
+    rows = ranked_rows([first, second], OUTPUT_CFG)
+
+    assert [(row["rank"], row["tied_count"]) for row in rows] == [(1, 2), (1, 2)]
+
+
+def test_row_label_lists_rank_name_total_and_signal():
+    from src.reporter import ranked_rows, row_label
+
+    rows = ranked_rows([STOCK_80, STOCK_NONE], OUTPUT_CFG)
+
+    assert row_label(rows[0]) == "1  600036 招商银行  80.0  买入"
+    assert row_label(rows[1]) == "2  600000 浦发银行  N/A  数据不足"
+
+
+def test_render_detail_shows_breakdown_and_penalty_chain():
+    from src.reporter import render_detail
+
+    text = render_detail(DETAIL_ROW, DETAIL_RULES)
+
+    assert "600036 招商银行" in text
+    assert "总分 72.0" in text and "排名 1" in text and "信号 买入" in text
+    metric = _detail_line(text, "股息率")
+    assert "5.0%" in metric and "1.0" in metric and "60" in metric and "60.0" in metric
+    assert "加权小计 80.0" in text
+    assert "可持续性扣分 10%" in text and "盈利下滑 5%（2026中报）" in text
+    assert "缺失指标：无（覆盖 2/2）" in text
+
+
+def test_render_detail_marks_missing_indicator_rows():
+    from src.reporter import render_detail
+
+    item = {
+        **DETAIL_ITEM,
+        "total": 100.0,
+        "values": {"dividend_yield": 5.0},
+        "scores": {"dividend_yield": 1.0},
+        "missing": ["dividend_years"],
+        "sustainability": None,
+    }
+
+    text = render_detail({"item": item, "rank": 2, "tied_count": 1, "signal": "观察"}, DETAIL_RULES)
+
+    metric = _detail_line(text, "连续分红")
+    assert "40" in metric  # 权重照常显示
+    assert "缺失指标：连续分红（覆盖 1/2）" in text
+    assert "可持续性扣分" not in text  # 无财报数据时不显示扣分行
+
+
+def test_render_detail_without_any_score_states_data_shortage():
+    from src.reporter import render_detail
+
+    item = {
+        **DETAIL_ITEM,
+        "total": None,
+        "values": {},
+        "scores": {},
+        "missing": ["dividend_yield", "dividend_years"],
+        "sustainability": None,
+    }
+
+    text = render_detail({"item": item, "rank": 3, "tied_count": 1, "signal": "数据不足"}, DETAIL_RULES)
+
+    assert "总分 N/A" in text and "信号 数据不足" in text
+    assert "加权小计 N/A" in text  # 不编造分数
+    assert "缺失指标：股息率、连续分红（覆盖 0/2）" in text

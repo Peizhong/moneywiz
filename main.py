@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import argparse
 import logging
 import math
 import sys
@@ -14,7 +15,7 @@ import time
 from datetime import date
 from pathlib import Path
 
-from src import config, constituents, data, indicators, reporter, scorer
+from src import config, constituents, data, indicators, interactive, reporter, scorer
 
 logger = logging.getLogger(__name__)
 
@@ -417,6 +418,18 @@ def run(
     as_of: date | None = None,
 ) -> str:
     """跑一遍筛选并返回完整报告文本（含摘要行）。"""
+    return run_scan(config_dir, cache_dir, as_of)["report"]
+
+
+def run_scan(
+    config_dir: Path = Path("config"),
+    cache_dir: Path = Path("cache"),
+    as_of: date | None = None,
+) -> dict:
+    """跑一遍筛选，返回 ``{"report", "stock_results", "rules", "output"}``。
+
+    比 :func:`run` 多带回交互式详情所需的原始结果（report 之外的部分不被消费）。
+    """
     started = time.monotonic()
     cfg = config.load_config(config_dir)
     data.configure_cache(
@@ -475,28 +488,44 @@ def run(
         )
         for fund in cfg.funds
     ]
-    return reporter.render_report(
-        stock_results,
-        fund_results,
-        cfg.output,
-        time.monotonic() - started,
-        market=market,
-        risk_hints=cfg.rules["stocks"].get("risk_hints"),
+    return {
+        "report": reporter.render_report(
+            stock_results,
+            fund_results,
+            cfg.output,
+            time.monotonic() - started,
+            market=market,
+            risk_hints=cfg.rules["stocks"].get("risk_hints"),
+        ),
+        "stock_results": stock_results,
+        "rules": cfg.rules,
+        "output": cfg.output,
+    }
+
+
+def main(argv=None) -> int:
+    """CLI 入口：打印报告；是交互式终端时接着进入详情会话；配置错误返回 1。"""
+    parser = argparse.ArgumentParser(
+        description="红利投资筛选：打印信号表；在交互式终端里可选中个股查看指标明细。"
     )
-
-
-def main() -> int:
-    """CLI 入口：打印报告；配置错误时提示并返回 1。"""
+    parser.add_argument(
+        "--no-interactive",
+        action="store_true",
+        help="报表打印后不进入交互式详情（管道/重定向时本就不会进入）",
+    )
+    args = parser.parse_args(argv)
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
     try:
-        report = run()
+        scan = run_scan()
     except config.ConfigError as exc:
         logger.error("配置加载失败：%s", exc)
         print(f"配置错误：{exc}", file=sys.stderr)
         return 1
-    print(report)
+    print(scan["report"])
+    if interactive.enabled(args.no_interactive):
+        interactive.session(scan["stock_results"], scan["rules"]["stocks"], scan["output"])
     return 0
 
 

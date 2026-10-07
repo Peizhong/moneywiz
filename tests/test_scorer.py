@@ -11,6 +11,7 @@ import pytest
 from src.scorer import (
     apply_sustainability_penalty,
     normalize,
+    score_breakdown,
     score_instrument,
 )
 
@@ -141,6 +142,37 @@ def test_score_instrument_missing_indicator_is_renormalized(missing_value):
     assert result["scores"] == {"dividend_yield": 1.0}
     assert result["total"] == 100.0
     assert result["missing"] == ["dividend_years"]
+
+
+def test_score_breakdown_rows_carry_weight_and_contribution():
+    """逐指标明细：贡献 = 档位分 × 权重 / 已评分权重之和 × 100，各行之和即扣分前总分。"""
+    rows = score_breakdown({"dividend_yield": 5.0, "dividend_years": 3}, RULES_60_40)
+
+    assert [row["name"] for row in rows] == ["dividend_yield", "dividend_years"]  # 保持规则顺序
+    assert rows[0] == {
+        "name": "dividend_yield",
+        "value": 5.0,
+        "score": 1.0,
+        "weight": 60,
+        "contribution": 60.0,
+    }
+    assert rows[1]["score"] == 0.5
+    assert rows[1]["contribution"] == pytest.approx(20.0)
+    assert sum(row["contribution"] for row in rows) == pytest.approx(score_instrument(
+        {"dividend_yield": 5.0, "dividend_years": 3}, RULES_60_40
+    )["total"])
+
+
+def test_score_breakdown_missing_indicator_has_no_contribution():
+    """数据缺失的指标仍占一行（让用户看到"缺了什么"），但档位/贡献为 None。"""
+    rows = score_breakdown({"dividend_yield": 5.0, "dividend_years": None}, RULES_60_40)
+
+    missing = rows[1]
+    assert missing["name"] == "dividend_years"
+    assert missing["value"] is None
+    assert missing["score"] is None
+    assert missing["contribution"] is None
+    assert rows[0]["contribution"] == pytest.approx(100.0)  # 分母只含实际参与评分的权重
 
 
 def test_score_instrument_all_missing_total_is_none():

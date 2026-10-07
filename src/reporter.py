@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from tabulate import tabulate
 
+from src.scorer import apply_sustainability_penalty, score_breakdown
+
 INDICATOR_LABELS: dict[str, str] = {
     "dividend_yield": "股息率",
     "dividend_yield_percentile": "股息率分位",
@@ -171,25 +173,21 @@ def _table(results: list[dict], output_cfg: dict, risk_hints: dict | None = None
         return EMPTY_SECTION
 
     rows = []
-    # 同分同名次（竞赛排名）：并列组共享名次与信号，边界同分不会被代码排序切开；
-    # 数据不足的标的排最后同属一组，信号由 has_score 直接判定为「数据不足」，
-    # 不参与买入/末位名额。
-    items = _sorted_results(results)
-    ranks = _competition_ranks(items)
-    signals = _signals(
-        items,
-        ranks,
-        len(results),
-        output_cfg["buy_top_n"],
-        output_cfg["avoid_bottom_n"],
-    )
-    for (rank, tied_count), item, signal in zip(ranks, items, signals):
+    for row in ranked_rows(results, output_cfg):
+        # 同分同名次（竞赛排名）：并列组共享名次与信号，边界同分不会被代码排序切开；
+        # 数据不足的标的排最后同属一组，信号直接判定为「数据不足」，不参与名额。
+        item, rank, tied_count, signal = (
+            row["item"],
+            row["rank"],
+            row["tied_count"],
+            row["signal"],
+        )
         total = item["total"]
         has_score = total is not None
         scores = item.get("scores") or {}
         values = item.get("values") or {}
         low_phrase, high_phrase = _position_phrases(item.get("position"))
-        rank_text = f"{rank}(并列{tied_count})" if tied_count > 1 else str(rank)
+        rank_text = _rank_text(rank, tied_count)
         name_text = item["name"]
         if item.get("new_constituent"):
             name_text = f"{name_text}(新增)"
@@ -236,6 +234,112 @@ def _coverage_text(scores: dict | None, missing: list[str] | None) -> str:
     """已评分/应有指标数，如 ``1/7``；``scores`` 为 None/缺席时按 0 个已评分计。"""
     scored = len(scores or {})
     return f"{scored}/{scored + len(missing or [])}"
+
+
+def _rank_text(rank: int, tied_count: int) -> str:
+    """名次显示：``1`` / ``1(并列6)``。"""
+    return f"{rank}(并列{tied_count})" if tied_count > 1 else str(rank)
+
+
+def ranked_rows(results: list[dict], output_cfg: dict) -> list[dict]:
+    """排序 + 竞赛名次 + 信号：报告表格与交互式选择列表的同源结果。
+
+    每项 ``{"item", "rank", "tied_count", "signal"}``。名次与信号含同分整组收发、
+    120 日高位不出让买入名额等规则——表格与选择列表都走这里，避免各写一份。
+    """
+    items = _sorted_results(results)
+    ranks = _competition_ranks(items)
+    signals = _signals(
+        items,
+        ranks,
+        len(results),
+        output_cfg["buy_top_n"],
+        output_cfg["avoid_bottom_n"],
+    )
+    return [
+        {"item": item, "rank": rank, "tied_count": tied, "signal": signal}
+        for (rank, tied), item, signal in zip(ranks, items, signals)
+    ]
+
+
+def row_label(row: dict) -> str:
+    """选择列表的一行：``名次  代码 名称  总分  信号``。"""
+    item = row["item"]
+    total = f"{item['total']:.1f}" if item["total"] is not None else "N/A"
+    return (
+        f"{_rank_text(row['rank'], row['tied_count'])}  "
+        f"{item['code']} {item['name']}  {total}  {row['signal']}"
+    )
+
+
+def render_detail(row: dict, rules_section: dict) -> str:
+    """单只标的的详情（交互式查看用）：逐指标档位/权重/贡献 + 扣分链 + 缺失指标。
+
+    只用 result dict 里已算好的数据，不额外取数、不新增字段。``row`` 为
+    :func:`ranked_rows` 的一项（需要 item/rank/tied_count/signal）。
+    """
+    item = row["item"]
+    breakdown = score_breakdown(item.get("values") or {}, rules_section)
+    contributions = [
+        entry["contribution"]
+        for entry in breakdown
+        if entry["contribution"] is not None
+    ]
+    # 加权小计 = 各贡献之和（与 score_instrument 的扣分前总分同值，构造上即一致）
+    pre_total = round(sum(contributions), 1) if contributions else None
+    _adjusted, penalty = apply_sustainability_penalty(
+        pre_total, item.get("sustainability"), rules_section.get("sustainability")
+    )
+    total_text = f"{item['total']:.1f}" if item["total"] is not None else "N/A"
+    header = (
+        f"{item['code']} {item['name']}   总分 {total_text}   "
+        f"排名 {_rank_text(row['rank'], row['tied_count'])}   信号 {row['signal']}"
+    )
+    table = tabulate(
+        [
+            [
+                INDICATOR_LABELS.get(entry["name"], entry["name"]),
+                _value_text(entry["name"], entry["value"]),
+                "-" if entry["score"] is None else f"{entry['score']:.1f}",
+                str(entry["weight"]),
+                "-" if entry["contribution"] is None else f"{entry['contribution']:.1f}",
+            ]
+            for entry in breakdown
+        ],
+        headers=["指标", "数值", "档位", "权重", "贡献"],
+        tablefmt="simple",
+        colalign=("left", "right", "right", "right", "right"),
+        disable_numparse=True,  # 数值已按各自单位格式化，勿再被 tabulate 重新解析（1.0→1）
+    )
+    if pre_total is None:
+        chain = "加权小计 N/A：全部指标数据不足，无法评分"
+    else:
+        chain = f"加权小计 {pre_total:.1f}"
+        if item.get("sustainability"):
+            reason = "、".join(_sustainability_phrases(item["sustainability"]))
+            chain += f" → 可持续性扣分 {penalty:.0f}%" + (
+                f"（{reason}）" if reason else ""
+            )
+        chain += f" → 总分 {total_text}"
+    missing = [
+        INDICATOR_LABELS.get(name, name) for name in item.get("missing") or []
+    ]
+    coverage = (
+        f"缺失指标：{'、'.join(missing) if missing else '无'}"
+        f"（覆盖 {_coverage_text(item.get('scores') or {}, item.get('missing'))}）"
+    )
+    return "\n".join([header, table, chain, coverage])
+
+
+def _value_text(name: str, value) -> str:
+    """指标数值按各自单位格式化；缺失 → ``-``（与亮点/风险列同一套格式表）。"""
+    if value is None:
+        return "-"
+    template = INDICATOR_VALUE_FORMATS.get(name)
+    try:
+        return template.format(float(value)) if template else f"{float(value):g}"
+    except (TypeError, ValueError):
+        return "-"
 
 
 def _sorted_results(results: list[dict]) -> list[dict]:
