@@ -388,8 +388,10 @@ def test_run_exposes_sustainability_flags(monkeypatch, config_dir, tmp_path):
     scan = main.run_scan(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
     item = next(r for r in scan["stock_results"] if r["code"] == "000001")
 
+    # debt 维度只取最重一条（spec 决策 7）：debt_jump 与 interest_cover 同为
+    # 默认 10.0 时平局，取候选构造顺序靠前者 → debt_jump。故此处只有三条。
     assert [f["key"] for f in item["sustainability_flags"]] == [
-        "eps_decline", "cash_cover", "debt_jump", "interest_cover",
+        "eps_decline", "cash_cover", "debt_jump",
     ]
     assert item["sustainability"]["debt_ratio_yoy"] == pytest.approx(13.0)
 
