@@ -87,11 +87,25 @@ _TIERS: dict[str, Tier] = {
 
 # 分红可持续性红标的默认扣分（可在 rules.yaml 的 stocks.sustainability 覆盖）
 DEFAULT_SUSTAINABILITY_PENALTY = {
-    "eps_decline_penalty": 10.0,  # 净利润增长率 < 0
-    "negative_cash_penalty": 15.0,  # 每股经营性现金流 ≤ 0
+    "eps_decline_penalty": 5.0,  # 最新报告期净利润同比下滑（单期）
+    "eps_repeated_penalty": 15.0,  # 近 repeated_periods 期中 ≥repeated_min_negative 期为负
+    "repeated_periods": 4,  # 连续恶化判定窗口（利润与现金流共用）
+    "repeated_min_negative": 3,  # 窗口内至少几期为负才算连续恶化
+    "negative_cash_penalty": 15.0,  # 最近年报每股经营性现金流 ≤ 0
     "cash_cover_penalty": 10.0,  # 近 12 个月分红 ÷ 经营现金流 > 100%
-    "max_penalty": 30.0,  # 合计封顶
+    "cash_decline_penalty": 5.0,  # 每股经营性现金流同季同比下滑（单期）
+    "cash_repeated_penalty": 15.0,  # 每股经营性现金流同季同比连续恶化
+    "debt_jump_penalty": 10.0,  # 资产负债率同季同比上升 ≥ debt_jump_threshold
+    "debt_jump_threshold": 10.0,  # 单位 pp（含等号）
+    "interest_cover_penalty": 10.0,  # 利息支付倍数为正且 < interest_cover_threshold
+    "interest_cover_threshold": 2.0,
+    "max_penalty": 45.0,  # 合计封顶
 }
+
+# 红标维度与 flags 的输出顺序。维度内「标的是同一件事」的判据互斥、取最重一条
+# （如连续恶化 vs 单期下滑）；唯 debt 的两条（杠杆跳升 / 利息保障）是两件不同的
+# 事，各自独立触发。
+_DIMENSIONS = ("profit", "cashflow", "coverage", "debt")
 
 
 def normalize(indicator: str, value: float | None, thresholds: dict) -> float | None:
@@ -176,30 +190,183 @@ def score_breakdown(
     return rows
 
 
+def _flag(
+    key: str, dimension: str, value: float | int, penalty: float, window: int | None = None
+) -> dict:
+    """一条红标明细；``window`` 仅 ``*_repeated`` 判据携带。"""
+    flag = {
+        "key": key,
+        "dimension": dimension,
+        "value": value,
+        "penalty": float(penalty),
+    }
+    if window is not None:
+        flag["window"] = int(window)
+    return flag
+
+
+def _repeated(series: list[dict] | None, key: str, cfg: dict) -> int | None:
+    """前 ``repeated_periods`` 条中 < 0 的条数；序列不足 window 条 → None。
+
+    数据不足（次新股报告期不够）不等于「未恶化」，故不给出条数，
+    由调用方降级为单期判据。
+    """
+    window = int(cfg["repeated_periods"])
+    if series is None or len(series) < window:
+        return None
+    negative = sum(1 for item in series[:window] if item[key] < 0)
+    return negative if negative >= int(cfg["repeated_min_negative"]) else None
+
+
+def _latest(series: list[dict] | None, key: str) -> float | None:
+    """多期序列里最新一期（首条）的数值；无序列 → None。"""
+    return series[0][key] if series else None
+
+
+def _heaviest(candidates: list[dict]) -> list[dict]:
+    """同一维度内标的是「同一件事」的候选只留最重一条。
+
+    同分时保留构造顺序靠前的那条（更直接/更严重的判据，如
+    「现金流绝对为负」先于「现金流连续恶化」）。
+    """
+    return sorted(candidates, key=lambda flag: flag["penalty"], reverse=True)[:1]
+
+
+def _profit_flags(sustainability: dict, cfg: dict) -> list[dict]:
+    """利润维度：连续恶化与单期下滑标的是同一件事 → 取最重一条。"""
+    candidates = []
+    repeated = _repeated(sustainability.get("eps_history"), "growth", cfg)
+    if repeated is not None:
+        candidates.append(
+            _flag(
+                "eps_repeated", "profit", repeated,
+                cfg["eps_repeated_penalty"], window=cfg["repeated_periods"],
+            )
+        )
+    eps_growth = sustainability.get("eps_growth")
+    if eps_growth is not None and float(eps_growth) < 0:
+        candidates.append(
+            _flag("eps_decline", "profit", float(eps_growth), cfg["eps_decline_penalty"])
+        )
+    return _heaviest(candidates)
+
+
+def _cashflow_flags(sustainability: dict, cfg: dict) -> list[dict]:
+    """现金流维度：绝对水平为负、连续恶化、单期下滑同指现金流走弱 → 取最重一条。
+
+    绝对水平的口径固定为最近年报（半年现金流与 TTM 分红不可比），趋势判定
+    改用同季同比（每股经营性现金流是累计 YTD 值，相邻期不可直接比较）。
+    """
+    candidates = []
+    op_cash = sustainability.get("op_cash_per_share")
+    if op_cash is not None and float(op_cash) <= 0:
+        candidates.append(
+            _flag("negative_cash", "cashflow", float(op_cash), cfg["negative_cash_penalty"])
+        )
+    history = sustainability.get("cash_yoy_history")
+    repeated = _repeated(history, "yoy", cfg)
+    if repeated is not None:
+        candidates.append(
+            _flag(
+                "cash_repeated", "cashflow", repeated,
+                cfg["cash_repeated_penalty"], window=cfg["repeated_periods"],
+            )
+        )
+    latest = _latest(history, "yoy")
+    if latest is not None and float(latest) < 0:
+        candidates.append(
+            _flag("cash_decline", "cashflow", float(latest), cfg["cash_decline_penalty"])
+        )
+    return _heaviest(candidates)
+
+
+def _coverage_flags(sustainability: dict, cfg: dict) -> list[dict]:
+    """分红覆盖维度：近 12 个月分红超过经营现金流（>100%）。"""
+    cash_cover = sustainability.get("cash_cover")
+    if cash_cover is None or float(cash_cover) <= 100:
+        return []
+    return [_flag("cash_cover", "coverage", float(cash_cover), cfg["cash_cover_penalty"])]
+
+
+def _debt_flags(sustainability: dict, cfg: dict) -> list[dict]:
+    """负债维度：杠杆跳升与利息保障是两件不同的事，各自独立触发（不取最重）。
+
+    只看**变化型**判据，不用资产负债率的绝对水平——绝对阈值会被银行
+    （实测 90%+）永久误报；银行「利息支付倍数」恒缺失，利息保障判据因此天然
+    跳过银行，无需行业分类。
+    """
+    flags = []
+    debt_ratio_yoy = sustainability.get("debt_ratio_yoy")
+    if debt_ratio_yoy is not None and float(debt_ratio_yoy) >= float(
+        cfg["debt_jump_threshold"]
+    ):
+        flags.append(
+            _flag("debt_jump", "debt", float(debt_ratio_yoy), cfg["debt_jump_penalty"])
+        )
+    interest_cover = sustainability.get("interest_cover")
+    # 必须为正：利息净收入为正（倍数为负，如格力 -860）属财务健康，不得误报
+    if (
+        interest_cover is not None
+        and float(interest_cover) > 0
+        and float(interest_cover) < float(cfg["interest_cover_threshold"])
+    ):
+        flags.append(
+            _flag("interest_cover", "debt", float(interest_cover), cfg["interest_cover_penalty"])
+        )
+    return flags
+
+
+_DIMENSION_FLAGS: dict[str, Callable[[dict, dict], list[dict]]] = {
+    "profit": _profit_flags,
+    "cashflow": _cashflow_flags,
+    "coverage": _coverage_flags,
+    "debt": _debt_flags,
+}
+
+
+def evaluate_sustainability(
+    sustainability: dict | None, config: dict | None = None
+) -> list[dict]:
+    """财报红标的**唯一**口径来源：返回按维度顺序排列的触发明细。
+
+    四个维度 ``profit`` / ``cashflow`` / ``coverage`` / ``debt`` 顺序固定；每条为
+    ``{"key", "dimension", "value", "penalty"}``，``*_repeated`` 另带 ``"window"``。
+    维度内标的是同一件事的判据互斥（连续恶化触发时不再叠加单期下滑），
+    ``debt`` 的两条判据相互独立、可同时出现。
+
+    边界：``growth < 0`` / ``yoy < 0`` 为严格小于；``debt_ratio_yoy ≥`` 阈值含等号；
+    ``interest_cover`` 必须为正且严格小于阈值。任一判据数据缺失 → 该判据不触发，
+    其余照常评估；``sustainability`` 为假值或数据全缺 → ``[]``（不可评分，而非健康）。
+    """
+    if not sustainability:
+        return []
+    cfg = {**DEFAULT_SUSTAINABILITY_PENALTY, **(config or {})}
+    return [
+        flag
+        for dimension in _DIMENSIONS
+        for flag in _DIMENSION_FLAGS[dimension](sustainability, cfg)
+    ]
+
+
 def apply_sustainability_penalty(
     total: float | None, sustainability: dict | None, config: dict | None = None
 ) -> tuple[float | None, float]:
     """按财报红标对总分扣分；返回 ``(调整后总分, 实际扣减百分比)``。
 
-    红标：盈利下滑（**最新报告期**净利润同比增长率 < 0，含中报/季报）、经营现金流
-    为负、分红超现金流（>100%；与经营现金流为负互斥，前者优先）。扣减为总分的
-    百分比并受 ``max_penalty`` 封顶。
-    ``total`` 为 None 或数据缺失 → 原样返回（0 扣减）。
+    红标明细一律由 ``evaluate_sustainability`` 判定（唯一口径来源），扣减为各维度
+    判定之和（profit / cashflow / coverage 各最多一条，debt 最多两条），并按
+    ``max_penalty`` 封顶。``total`` 为 None 或数据缺失 → 原样返回（0 扣减）。
     """
     if total is None or not sustainability:
         return total, 0.0
     cfg = {**DEFAULT_SUSTAINABILITY_PENALTY, **(config or {})}
-    penalty = 0.0
-    eps_growth = sustainability.get("eps_growth")
-    if eps_growth is not None and float(eps_growth) < 0:
-        penalty += float(cfg["eps_decline_penalty"])
-    op_cash = sustainability.get("op_cash_per_share")
-    cash_cover = sustainability.get("cash_cover")
-    if op_cash is not None and float(op_cash) <= 0:
-        penalty += float(cfg["negative_cash_penalty"])
-    elif cash_cover is not None and float(cash_cover) > 100:
-        penalty += float(cfg["cash_cover_penalty"])
-    penalty = min(penalty, float(cfg["max_penalty"]))
+    penalty = min(
+        sum(
+            float(flag["penalty"])
+            for flag in evaluate_sustainability(sustainability, cfg)
+        ),
+        float(cfg["max_penalty"]),
+    )
     if penalty <= 0:
         return total, 0.0
     return round(total * (1 - penalty / 100.0), 1), penalty

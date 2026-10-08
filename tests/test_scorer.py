@@ -10,6 +10,7 @@ import pytest
 
 from src.scorer import (
     apply_sustainability_penalty,
+    evaluate_sustainability,
     normalize,
     score_breakdown,
     score_instrument,
@@ -205,10 +206,13 @@ def test_score_instrument_unknown_indicator_warns_and_is_missing(caplog):
 # ---------------------------------------------------------------------------
 
 PENALTY_CFG = {
-    "eps_decline_penalty": 10.0,
-    "negative_cash_penalty": 15.0,
-    "cash_cover_penalty": 10.0,
-    "max_penalty": 30.0,
+    "eps_decline_penalty": 10.0, "eps_repeated_penalty": 15.0,
+    "repeated_periods": 4, "repeated_min_negative": 3,
+    "negative_cash_penalty": 15.0, "cash_cover_penalty": 10.0,
+    "cash_decline_penalty": 5.0, "cash_repeated_penalty": 15.0,
+    "debt_jump_penalty": 10.0, "debt_jump_threshold": 10.0,
+    "interest_cover_penalty": 10.0, "interest_cover_threshold": 2.0,
+    "max_penalty": 45.0,
 }
 
 
@@ -232,23 +236,154 @@ def test_penalty_single_flags():
     assert apply_sustainability_penalty(80.0, negative_cash, PENALTY_CFG) == (68.0, 15.0)
 
 
-def test_penalty_cash_rules_are_exclusive_and_capped():
-    # 现金流为负优先于分红超现金流（不重复计）
+def test_penalty_coverage_and_negative_cash_are_separate_dimensions():
+    """覆盖（coverage）与现金流的正负（cashflow）是两个独立维度，同时成立时叠加。
+
+    该组合在生产中不可达：``cash_cover`` 仅在 ``op_cash > 0`` 时计算，与「现金流为负」
+    天然互斥；这里只是维度聚合逻辑的单元测试。
+    """
     both = {"eps_growth": -5.0, "op_cash_per_share": -0.1, "cash_cover": 200.0}
     total, penalty = apply_sustainability_penalty(80.0, both, PENALTY_CFG)
-    assert penalty == 25.0  # 10（盈利下滑）+ 15（现金流为负）
-    assert total == pytest.approx(60.0)
+    assert penalty == 35.0  # 10（盈利下滑）+ 15（现金流为负）+ 10（分红超现金流）
+    assert total == pytest.approx(52.0)
 
 
 def test_penalty_cap_and_defaults():
-    cfg = dict(PENALTY_CFG, eps_decline_penalty=20.0, negative_cash_penalty=20.0)
+    cfg = dict(PENALTY_CFG, eps_decline_penalty=30.0, negative_cash_penalty=30.0)
     total, penalty = apply_sustainability_penalty(
         80.0, {"eps_growth": -5.0, "op_cash_per_share": -0.1}, cfg
     )
-    assert penalty == 30.0  # 封顶
-    assert total == pytest.approx(56.0)
+    assert penalty == 45.0  # 30 + 30 = 60 → 封顶 45
+    assert total == pytest.approx(44.0)
 
-    # 未提供配置 → 用默认值；total/警示缺失 → 原样返回
-    assert apply_sustainability_penalty(80.0, {"eps_growth": -5.0}, None) == (72.0, 10.0)
+    # 未提供配置 → 用默认值（单期盈利下滑默认已降为 5）；total/警示缺失 → 原样返回
+    assert apply_sustainability_penalty(80.0, {"eps_growth": -5.0}, None) == (76.0, 5.0)
     assert apply_sustainability_penalty(None, {"eps_growth": -5.0}, PENALTY_CFG) == (None, 0.0)
     assert apply_sustainability_penalty(80.0, None, PENALTY_CFG) == (80.0, 0.0)
+
+
+# ---------------------------------------------------------------------------
+# 红标判定（唯一口径来源）：四维度 profit / cashflow / coverage / debt
+# ---------------------------------------------------------------------------
+
+
+def test_evaluate_sustainability_returns_ordered_flags():
+    out = evaluate_sustainability(
+        {"eps_growth": -12.9, "op_cash_per_share": 0.5, "cash_cover": 200.0,
+         "debt_ratio_yoy": 13.0, "interest_cover": 1.4}, PENALTY_CFG
+    )
+    assert [(f["key"], f["dimension"]) for f in out] == [
+        ("eps_decline", "profit"), ("cash_cover", "coverage"),
+        ("debt_jump", "debt"), ("interest_cover", "debt"),
+    ]
+    assert out[0]["value"] == pytest.approx(-12.9)
+    assert out[0]["penalty"] == 10.0
+
+
+def test_evaluate_sustainability_keeps_one_flag_per_dimension():
+    # 连续恶化触发时单期不再叠加；现金流同理
+    out = evaluate_sustainability(
+        {"eps_growth": -12.9, "eps_history": [
+            {"period": "2026-06-30", "growth": -12.9},
+            {"period": "2026-03-31", "growth": -3.0},
+            {"period": "2025-12-31", "growth": -1.0},
+            {"period": "2025-09-30", "growth": 2.0},
+        ], "op_cash_per_share": -0.1}, PENALTY_CFG
+    )
+    keys = [f["key"] for f in out]
+    assert "eps_repeated" in keys and "eps_decline" not in keys
+    assert out[[f["key"] for f in out].index("eps_repeated")]["window"] == 4
+    assert "negative_cash" in keys and "cash_decline" not in keys
+
+
+def test_evaluate_sustainability_cash_trend_flags():
+    # 单期：最新一期同季同比为负、但未构成连续恶化 → cash_decline
+    single = evaluate_sustainability(
+        {"cash_yoy_history": [
+            {"period": "2026-06-30", "yoy": -22.0},
+            {"period": "2026-03-31", "yoy": 3.0},
+            {"period": "2025-12-31", "yoy": 4.0},
+            {"period": "2025-09-30", "yoy": 5.0},
+        ]}, PENALTY_CFG
+    )
+    assert [(f["key"], f["dimension"], f["value"], f["penalty"]) for f in single] == [
+        ("cash_decline", "cashflow", -22.0, 5.0)
+    ]
+
+    # 连续：4 期中 3 期为负 → cash_repeated（window 一并带出，单期不再叠加）
+    repeated = evaluate_sustainability(
+        {"cash_yoy_history": [
+            {"period": "2026-06-30", "yoy": -2.0},
+            {"period": "2026-03-31", "yoy": -3.0},
+            {"period": "2025-12-31", "yoy": -4.0},
+            {"period": "2025-09-30", "yoy": 5.0},
+        ]}, PENALTY_CFG
+    )
+    assert [(f["key"], f["value"], f["window"], f["penalty"]) for f in repeated] == [
+        ("cash_repeated", 3, 4, 15.0)
+    ]
+
+    # 同季同比 = 0 不触发（严格小于）
+    assert evaluate_sustainability(
+        {"cash_yoy_history": [{"period": "2026-06-30", "yoy": 0.0}]}, PENALTY_CFG
+    ) == []
+
+
+def test_evaluate_sustainability_cashflow_keeps_heaviest_flag():
+    # 两条同为 15 分时取「绝对水平为负」（更直接的那条），不叠加
+    out = evaluate_sustainability(
+        {"op_cash_per_share": -0.1, "cash_yoy_history": [
+            {"period": "2026-06-30", "yoy": -2.0},
+            {"period": "2026-03-31", "yoy": -3.0},
+            {"period": "2025-12-31", "yoy": -4.0},
+            {"period": "2025-09-30", "yoy": 5.0},
+        ]}, PENALTY_CFG
+    )
+    assert [(f["key"], f["value"]) for f in out] == [("negative_cash", -0.1)]
+
+
+def test_evaluate_sustainability_short_series_skips_repeated():
+    # Review Focus 4：不足 4 期 → 不触发连续判据，单期判据仍生效
+    out = evaluate_sustainability(
+        {"eps_growth": -12.9, "eps_history": [
+            {"period": "2026-06-30", "growth": -12.9},
+            {"period": "2026-03-31", "growth": -3.0},
+        ]}, PENALTY_CFG
+    )
+    assert [f["key"] for f in out] == ["eps_decline"]
+
+
+def test_evaluate_sustainability_boundaries():
+    assert evaluate_sustainability({"eps_growth": 0.0}, PENALTY_CFG) == []
+    assert evaluate_sustainability({"debt_ratio_yoy": 10.0}, PENALTY_CFG)[0]["key"] == "debt_jump"
+    assert evaluate_sustainability({"interest_cover": 2.0}, PENALTY_CFG) == []
+    # 银行：利息支付倍数缺失 + 负债率平稳 → 零红标
+    assert evaluate_sustainability(
+        {"debt_ratio_yoy": 0.3, "interest_cover": None}, PENALTY_CFG) == []
+
+
+def test_evaluate_sustainability_ignores_nonpositive_interest_cover():
+    # 格力型：利息净收入为正（倍数为负）属财务健康，不得误报
+    assert evaluate_sustainability({"interest_cover": -860.0}, PENALTY_CFG) == []
+    assert evaluate_sustainability({"interest_cover": 0.0}, PENALTY_CFG) == []
+
+
+def test_evaluate_sustainability_empty_input_returns_empty():
+    assert evaluate_sustainability(None, PENALTY_CFG) == []
+    assert evaluate_sustainability({}, PENALTY_CFG) == []
+    assert evaluate_sustainability(
+        {"eps_growth": None, "op_cash_per_share": None, "cash_cover": None,
+         "debt_ratio_yoy": None, "interest_cover": None,
+         "eps_history": [], "cash_yoy_history": []}, PENALTY_CFG
+    ) == []
+
+
+def test_penalty_caps_at_four_dimension_total():
+    both = {"eps_growth": -12.9, "op_cash_per_share": -0.1,
+            "cash_cover": 200.0, "debt_ratio_yoy": 13.0}
+    # 利润 10 + 现金流 15 + 覆盖 10 + 负债 10 = 45（未触发封顶）
+    assert apply_sustainability_penalty(80.0, both, PENALTY_CFG) == (44.0, 45.0)
+    # 现金流维度只取最重一条：negative_cash(15) 与 cash_repeated(15) 不叠加
+    assert evaluate_sustainability(
+        {"op_cash_per_share": -0.1, "cash_cover": None}, PENALTY_CFG
+    )[0]["key"] == "negative_cash"

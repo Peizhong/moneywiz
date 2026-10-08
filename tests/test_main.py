@@ -545,10 +545,10 @@ def test_run_applies_sustainability_penalty_to_total(monkeypatch, config_dir, tm
 
     report = main.run(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
 
-    # 平安银行：盈利下滑(-10%) + 分红超现金流(TTM 1.0/0.5=200% → -10%) = 扣 20% → 92.5→74.0
-    assert "74.0" in _row_for(report, "平安银行")
-    # 招商银行：TTM 分红较低，仅盈利下滑一项（-10%）→ 25.0→22.5
-    assert "22.5" in _row_for(report, "招商银行")
+    # 平安银行：盈利单期下滑(-5%) + 分红超现金流(TTM 1.0/0.5=200% → -10%) = 扣 15% → 92.5→78.6
+    assert "78.6" in _row_for(report, "平安银行")
+    # 招商银行：TTM 分红较低，仅盈利单期下滑一项（-5%）→ 25.0→23.8
+    assert "23.8" in _row_for(report, "招商银行")
 
 
 def test_run_scores_dividend_trend(monkeypatch, tmp_path):

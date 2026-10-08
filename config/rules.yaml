@@ -32,13 +32,31 @@ stocks:
     # 与"长期持有、稳定优先"的目标冲突，让位于 volatility；如需可自行加回
 
 
-  # 财报红标对总分的扣减（%）：盈利下滑（按最新报告期同比，含中报/季报）/
-  # 经营现金流为负 / 分红超现金流（两者按最近年报口径），封顶 30%
+  # 财报红标对总分的扣减（%）：四个维度各自判定，触发明细见 scorer.evaluate_sustainability
+  #   profit    最新报告期净利润同比下滑（单期 5）；或近 repeated_periods 期中
+  #             ≥repeated_min_negative 期为负（连续恶化 15）——二者只取最重一条
+  #   cashflow  最近年报每股经营性现金流 ≤ 0（15）；或同季同比连续恶化（15）；
+  #             或同季同比单期下滑（5）——三者只取最重一条
+  #   coverage  近 12 个月分红 ÷ 经营现金流 > 100%（10）
+  #   debt      资产负债率同季同比上升 ≥ debt_jump_threshold pp（10）；利息支付倍数
+  #             为正且 < interest_cover_threshold（10）——两条相互独立，可同时触发。
+  #             不用负债率绝对水平：绝对阈值会误报银行（实测 90%+）；银行该指标
+  #             「利息支付倍数」恒缺失，故天然豁免
+  # 合计封顶 max_penalty
   sustainability:
-    eps_decline_penalty: 10
+    eps_decline_penalty: 5      # 单期下滑（与连续恶化只取最重一条）
+    eps_repeated_penalty: 15    # 连续恶化：窗口内 ≥repeated_min_negative 期为负
+    repeated_periods: 4         # 连续恶化判定窗口（利润与现金流共用，不足 4 期不判）
+    repeated_min_negative: 3
     negative_cash_penalty: 15
     cash_cover_penalty: 10
-    max_penalty: 30
+    cash_decline_penalty: 5     # 每股经营性现金流同季同比单期下滑
+    cash_repeated_penalty: 15   # 每股经营性现金流同季同比连续恶化
+    debt_jump_penalty: 10
+    debt_jump_threshold: 10     # 资产负债率同季同比上升的 pp 阈值（含等号）
+    interest_cover_penalty: 10
+    interest_cover_threshold: 2.0   # 利息支付倍数（须为正）严格小于该值才触发
+    max_penalty: 45
 
   # 风险列提示阈值（只标注、不影响分数）；波动率已成为打分指标，不在此提示
   risk_hints:
