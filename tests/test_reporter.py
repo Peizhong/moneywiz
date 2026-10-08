@@ -636,6 +636,7 @@ def test_stability_tiers_show_in_highlight_and_risk_columns():
 
 def test_negative_operating_cash_flow_warning():
     result = _result("600015", "华夏银行", 70.0, scores={"dividend_yield": 1.0})
+    result["sustainability"] = {"eps_growth": 5.0}  # 盈利为正（真实数据、无对应红标）
     result["sustainability_flags"] = [
         {"key": "negative_cash", "dimension": "cashflow", "value": -0.2, "penalty": 15.0},
     ]
@@ -643,7 +644,28 @@ def test_negative_operating_cash_flow_warning():
     row = _table_rows(render_report([result], [], OUTPUT_CFG, 1.0), STOCK_HEADER)[0]
 
     assert "经营现金流为负" in row
-    assert "盈利下滑" not in row  # 无利润维度红标就不提示
+    assert "盈利下滑" not in row  # 盈利为正 → 判定层不出 profit 红标 → 展示层不得凭空提示
+
+
+def test_display_layer_renders_flags_only_never_rejudges_thresholds():
+    # 本任务的核心不变量：展示层只看 flags。sustainability 里放的是**会触发旧逻辑**的原始值
+    # （旧实现直接判 eps_growth<0 / op_cash<=0 / cash_cover>100 并输出三条文案），
+    # 但判定层的 flags 为空 → 风险列一条红标文案都不许出。
+    result = _result("600015", "华夏银行", 70.0, scores={"dividend_yield": 1.0})
+    result["sustainability"] = {
+        "eps_growth": -12.0,
+        "op_cash_per_share": -0.2,
+        "cash_cover": 200.0,
+    }
+    result["sustainability_flags"] = []
+
+    row = _table_rows(render_report([result], [], OUTPUT_CFG, 1.0), STOCK_HEADER)[0]
+    detail = render_detail(ranked_rows([result], OUTPUT_CFG)[0], RULES_SECTION)
+
+    for text in (row, detail):  # 表格风险列与详情扣分链都只许读 flags
+        assert "盈利下滑" not in text
+        assert "经营现金流为负" not in text
+        assert "分红超现金流" not in text
 
 
 def test_new_constituent_marker_in_name():
