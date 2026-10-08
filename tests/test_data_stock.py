@@ -816,6 +816,8 @@ def test_financial_health_eps_growth_uses_latest_period(monkeypatch, tmp_path):
         "eps_period": "2026-06-30",
         "op_cash_per_share": pytest.approx(2.77),
         "payout_stmt": pytest.approx(60.0),
+        # 帧内最新报告期（现金流趋势窗口的锚点）
+        "latest_period": "2026-06-30",
         # 逐报告期序列（新→旧）：2026 两期缺去年同期基期、其余各期缺更早一年
         "eps_history": [
             {"period": "2026-06-30", "growth": pytest.approx(-12.9)},
@@ -850,6 +852,111 @@ def test_financial_health_eps_growth_falls_back_when_latest_blank(
 
     assert out["eps_growth"] == pytest.approx(-14.7)  # 最新行留空 → 回退到最近有效行
     assert out["eps_period"] == "2026-03-31"
+
+
+def test_financial_health_latest_period_counts_blank_newest_row(monkeypatch, tmp_path):
+    """latest_period = 帧内最新报告期，不看该期各字段是否有值。
+
+    现金流趋势判据靠它判断窗口是否锚在最新期（I1）：最新期各字段全空时，
+    被剔除的陈旧窗口不得再当作「近 4 期」。
+    """
+    frame = pd.concat(
+        [_financial_frame(), pd.DataFrame({"日期": ["2026-09-30"]})],
+        ignore_index=True,
+    )
+    monkeypatch.setattr(
+        ak, "stock_financial_analysis_indicator", lambda symbol, start_year: frame
+    )
+
+    out = get_financial_health("600015", tmp_path)
+
+    assert out["latest_period"] == "2026-09-30"  # 全空的最新期也要算数
+    # 既有回退语义不变：eps 仍取最近一个有效行
+    assert out["eps_period"] == "2026-06-30"
+    assert out["eps_growth"] == pytest.approx(-12.9)
+
+
+def test_financial_health_skips_malformed_period(monkeypatch, tmp_path):
+    """无法解析的报告期（不含 ``-`` 分隔符）只跳过该期，不得让整只标的数据丢失（M1）。"""
+    odd = pd.DataFrame(
+        {
+            "日期": ["2025/12/31"],
+            "净利润增长率(%)": [-1.0],
+            "每股经营性现金流(元)": [0.5],
+        }
+    )
+    frame = pd.concat([_financial_frame(), odd], ignore_index=True)
+    monkeypatch.setattr(
+        ak, "stock_financial_analysis_indicator", lambda symbol, start_year: frame
+    )
+
+    out = get_financial_health("600015", tmp_path)
+
+    assert out is not None  # 修复前这里整体抛 ValueError，红标全丢
+    assert out["latest_period"] == "2026-06-30"  # 非法日期不参与锚点
+    assert "2025/12/31" not in [e["period"] for e in out["eps_history"]]
+    assert [e["period"] for e in out["cash_yoy_history"]] == [
+        "2025-12-31", "2024-12-31",
+    ]
+
+
+def test_financial_health_stale_cash_window_suppresses_trend_flags(monkeypatch, tmp_path):
+    """I1 端到端：最近几期的去年同季基期 ≤0 被剔除 → 窗口前移 → 趋势红标不触发。
+
+    601166 兴业银行型：数据层给出的 ``cash_yoy_history`` 最新期停在 2025-09-30，
+    而帧内最新报告期是 2026-06-30；修复前「现金流连续下滑 4/4 期」照常触发，
+    拿一年前（实际案例是两年前）的数据扣 15 分。
+    """
+    from src import scorer
+
+    frame = pd.DataFrame(
+        {
+            "日期": [
+                "2023-06-30", "2023-09-30", "2023-12-31",
+                "2024-03-31", "2024-06-30", "2024-09-30", "2024-12-31",
+                "2025-03-31", "2025-06-30", "2025-09-30", "2025-12-31",
+                "2026-03-31", "2026-06-30",
+            ],
+            "每股经营性现金流(元)": [
+                0.3, 0.4, 0.4,
+                0.5, -0.2, 0.3, -0.3,
+                -1.0, -2.0, -1.5, 0.6,
+                0.2, 0.3,
+            ],
+            "净利润增长率(%)": [3.0] * 13,
+        }
+    )
+    monkeypatch.setattr(
+        ak, "stock_financial_analysis_indicator", lambda symbol, start_year: frame
+    )
+
+    out = get_financial_health("601166", tmp_path)
+    history = out["cash_yoy_history"]
+
+    assert out["latest_period"] == "2026-06-30"
+    assert out["op_cash_per_share"] == pytest.approx(0.6)  # 最近年报为正，无绝对水平红标
+    # 2026 两期、2025-12-31 与 2025-06-30 的基期 ≤0 → 剔除，窗口最新期早于帧最新期
+    assert history[0]["period"] == "2025-09-30"
+    assert sum(1 for e in history[:4] if e["yoy"] < 0) >= 3  # 修复前必然构成连续恶化
+    assert scorer.evaluate_sustainability(out, None) == []  # 窗口陈旧 → 趋势判据降级
+
+
+def test_financial_health_duplicate_period_takes_first_row(monkeypatch, tmp_path):
+    """同一报告期重复出现（重述）→ 取上游帧里的首行（稳定排序保证）。"""
+    frame = pd.DataFrame(
+        {
+            "日期": ["2025-12-31", "2026-06-30", "2026-06-30"],
+            "净利润增长率(%)": [3.0, -12.9, 99.0],
+            "每股经营性现金流(元)": [1.0, 0.5, 9.9],
+        }
+    )
+    monkeypatch.setattr(
+        ak, "stock_financial_analysis_indicator", lambda symbol, start_year: frame
+    )
+
+    out = get_financial_health("600015", tmp_path)
+
+    assert out["eps_growth"] == pytest.approx(-12.9)  # 首行，不是后面的重述值 99.0
 
 
 def test_financial_health_annual_only_frame_uses_annual_period(monkeypatch, tmp_path):

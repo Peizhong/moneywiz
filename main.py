@@ -272,7 +272,7 @@ def _sustainability(code, dividends, as_of, cache_dir, financial_cache_days):
 
     数据来自 ``get_financial_health``（带 cache_days 缓存）：盈利下滑按最新报告期
     （含中报/季报）净利润同比，现金流与分红覆盖率按最近年报口径；任一数据缺失
-    只影响对应警示。多期序列与负债字段**原样透传**给判定层
+    只影响对应警示。多期序列、负债字段与最新报告期锚点**原样透传**给判定层
     （``scorer.evaluate_sustainability`` 消费），此处不判断任何阈值。
     """
     health = _fetch(
@@ -297,6 +297,7 @@ def _sustainability(code, dividends, as_of, cache_dir, financial_cache_days):
         "cash_yoy_history": health.get("cash_yoy_history"),
         "debt_ratio_yoy": health.get("debt_ratio_yoy"),
         "interest_cover": health.get("interest_cover"),
+        "latest_period": health.get("latest_period"),
     }
 
 

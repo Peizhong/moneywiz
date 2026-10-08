@@ -578,10 +578,11 @@ def test_run_exposes_sustainability_flags(monkeypatch, config_dir, tmp_path):
 def test_run_exposes_repeated_flags_from_passed_through_history(
     monkeypatch, config_dir, tmp_path
 ):
-    """两个序列必须原样透传：丢键时连续恶化判据会静默消失（单期判据仍在）。"""
+    """两个序列与最新报告期锚点必须原样透传：丢键时连续恶化判据会静默消失。"""
     def health(code, cache_dir, cache_days=30):
         return {"eps_growth": -12.6, "eps_period": "2026-06-30",
                 "op_cash_per_share": 0.5, "payout_stmt": None,
+                "latest_period": "2026-06-30",
                 "eps_history": [
                     {"period": "2026-06-30", "growth": -12.9},
                     {"period": "2026-03-31", "growth": -14.7},
@@ -610,6 +611,8 @@ def test_run_exposes_repeated_flags_from_passed_through_history(
     assert flags["cash_repeated"]["value"] == 3
     assert flags["cash_repeated"]["window"] == 4
     assert "eps_decline" not in flags and "cash_decline" not in flags
+    # 趋势门禁（决策 11 延伸）依赖锚点透传：丢键时 cash_* 会整体静默消失
+    assert item["sustainability"]["latest_period"] == "2026-06-30"
 
 
 def test_run_sustainability_flags_empty_when_health_unavailable(monkeypatch, config_dir, tmp_path):

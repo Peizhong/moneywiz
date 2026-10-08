@@ -301,8 +301,9 @@ def test_evaluate_sustainability_keeps_one_flag_per_dimension():
 
 def test_evaluate_sustainability_cash_trend_flags():
     # 单期：最新一期同季同比为负、但未构成连续恶化 → cash_decline
+    # （窗口锚在最新报告期，latest_period 门禁放行——见下一条用例）
     single = evaluate_sustainability(
-        {"cash_yoy_history": [
+        {"latest_period": "2026-06-30", "cash_yoy_history": [
             {"period": "2026-06-30", "yoy": -22.0},
             {"period": "2026-03-31", "yoy": 3.0},
             {"period": "2025-12-31", "yoy": 4.0},
@@ -315,7 +316,7 @@ def test_evaluate_sustainability_cash_trend_flags():
 
     # 连续：4 期中 3 期为负 → cash_repeated（window 一并带出，单期不再叠加）
     repeated = evaluate_sustainability(
-        {"cash_yoy_history": [
+        {"latest_period": "2026-06-30", "cash_yoy_history": [
             {"period": "2026-06-30", "yoy": -2.0},
             {"period": "2026-03-31", "yoy": -3.0},
             {"period": "2025-12-31", "yoy": -4.0},
@@ -328,14 +329,77 @@ def test_evaluate_sustainability_cash_trend_flags():
 
     # 同季同比 = 0 不触发（严格小于）
     assert evaluate_sustainability(
-        {"cash_yoy_history": [{"period": "2026-06-30", "yoy": 0.0}]}, PENALTY_CFG
+        {"latest_period": "2026-06-30",
+         "cash_yoy_history": [{"period": "2026-06-30", "yoy": 0.0}]}, PENALTY_CFG
     ) == []
+
+
+def test_evaluate_sustainability_cash_trend_requires_latest_period_anchor():
+    """窗口未锚在最新报告期 → 两条趋势判据都按数据不足处理（I1）。
+
+    601166 型：2025/2026 的同季同比因去年同季基期 ≤0 被整条剔除，窗口整体
+    停在 2024Q1–Q4；若照旧触发就是拿两年前的数据扣 15 分，且文案读起来像当期。
+    其余判据（负现金流、覆盖、利润侧、负债侧）不受门禁影响。
+    """
+    stale_repeated = [  # 4 期中 3 期为负，但窗口停在两年前
+        {"period": "2024-12-31", "yoy": -2.0},
+        {"period": "2024-09-30", "yoy": -3.0},
+        {"period": "2024-06-30", "yoy": -4.0},
+        {"period": "2024-03-31", "yoy": 5.0},
+    ]
+    stale_decline = [  # 未构成连续恶化，但最新窗口期同比为负
+        {"period": "2024-12-31", "yoy": -22.0},
+        {"period": "2024-09-30", "yoy": 3.0},
+        {"period": "2024-06-30", "yoy": 4.0},
+        {"period": "2024-03-31", "yoy": 5.0},
+    ]
+    for history in (stale_repeated, stale_decline):
+        assert evaluate_sustainability(
+            {"latest_period": "2026-06-30", "cash_yoy_history": history}, PENALTY_CFG
+        ) == []
+
+    # 绝对水平、覆盖、利润侧、负债侧照常（利润侧不设锚点门禁）
+    out = evaluate_sustainability(
+        {"latest_period": "2026-06-30",
+         "op_cash_per_share": -0.1,
+         "cash_cover": 200.0,
+         "eps_growth": -12.9,
+         "eps_history": [
+             {"period": "2026-06-30", "growth": -12.9},
+             {"period": "2026-03-31", "growth": -3.0},
+             {"period": "2025-12-31", "growth": -1.0},
+             {"period": "2025-09-30", "growth": 2.0},
+         ],
+         "debt_ratio_yoy": 13.0,
+         "cash_yoy_history": stale_repeated}, PENALTY_CFG
+    )
+    assert [f["key"] for f in out] == [
+        "eps_repeated", "negative_cash", "cash_cover", "debt_jump",
+    ]
+
+
+def test_evaluate_sustainability_cash_trend_skips_without_latest_period():
+    """latest_period 缺失/为 None（旧缓存、手改数据）→ 趋势判据降级，不崩溃。
+
+    缺锚点时无法证明窗口是当期的，按决策 11 的立意视为数据不足。
+    """
+    history = [
+        {"period": "2026-06-30", "yoy": -2.0},
+        {"period": "2026-03-31", "yoy": -3.0},
+        {"period": "2025-12-31", "yoy": -4.0},
+        {"period": "2025-09-30", "yoy": 5.0},
+    ]
+    for extra in ({}, {"latest_period": None}):
+        assert evaluate_sustainability(
+            {"cash_yoy_history": history, **extra}, PENALTY_CFG
+        ) == []
 
 
 def test_evaluate_sustainability_cashflow_keeps_heaviest_flag():
     # 两条同为 15 分时取「绝对水平为负」（更直接的那条），不叠加
     out = evaluate_sustainability(
-        {"op_cash_per_share": -0.1, "cash_yoy_history": [
+        {"latest_period": "2026-06-30", "op_cash_per_share": -0.1,
+         "cash_yoy_history": [
             {"period": "2026-06-30", "yoy": -2.0},
             {"period": "2026-03-31", "yoy": -3.0},
             {"period": "2025-12-31", "yoy": -4.0},

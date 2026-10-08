@@ -555,6 +555,7 @@ def test_risk_column_holds_six_items():
 def test_sustainability_none_renders_no_warning():
     # Review Focus 5：sustainability 与 flags 均缺失 → 三处调用点都不出文案、不崩溃
     result = _result("000001", "平安银行", 80.0, scores={"dividend_yield": 1.0})
+    result["values"] = {"dividend_yield": 5.0}  # 有贡献 → pre_total 非 None，详情页走到扣分链
     result["sustainability"] = None
     result.pop("sustainability_flags", None)
 
@@ -562,6 +563,7 @@ def test_sustainability_none_renders_no_warning():
     detail = render_detail(ranked_rows([result], OUTPUT_CFG)[0], RULES_SECTION)
 
     assert "盈利下滑" not in report and "利息保障" not in report
+    assert "加权小计 100.0" in detail  # 防惰性：确实走到了扣分链（而非「加权小计 N/A」）
     assert "可持续性扣分" not in detail
 
 
@@ -649,9 +651,11 @@ def test_negative_operating_cash_flow_warning():
 
 def test_display_layer_renders_flags_only_never_rejudges_thresholds():
     # 本任务的核心不变量：展示层只看 flags。sustainability 里放的是**会触发旧逻辑**的原始值
-    # （旧实现直接判 eps_growth<0 / op_cash<=0 / cash_cover>100 并输出三条文案），
-    # 但判定层的 flags 为空 → 风险列一条红标文案都不许出。
+    # （旧实现直接判 eps_growth<0 / op_cash<=0 / cash_cover>100，输出「盈利下滑」与
+    # 「经营现金流为负」两条文案——cash_cover 那条被 elif 短路），
+    # 但判定层的 flags 为空 → 风险列与详情扣分链一条红标文案都不许出。
     result = _result("600015", "华夏银行", 70.0, scores={"dividend_yield": 1.0})
+    result["values"] = {"dividend_yield": 5.0}  # 有贡献 → pre_total 非 None，详情页走到扣分链
     result["sustainability"] = {
         "eps_growth": -12.0,
         "op_cash_per_share": -0.2,
@@ -662,6 +666,7 @@ def test_display_layer_renders_flags_only_never_rejudges_thresholds():
     row = _table_rows(render_report([result], [], OUTPUT_CFG, 1.0), STOCK_HEADER)[0]
     detail = render_detail(ranked_rows([result], OUTPUT_CFG)[0], RULES_SECTION)
 
+    assert "可持续性扣分" in detail  # 防惰性：确实走到了读 flags 的扣分链
     for text in (row, detail):  # 表格风险列与详情扣分链都只许读 flags
         assert "盈利下滑" not in text
         assert "经营现金流为负" not in text

@@ -30,6 +30,7 @@
 9. **单期判据降权：盈利单期下滑从 −10 降到 −5。** 与决策 6 配套，把「一次下降不用太在意」编码进力度结构。
 10. **红标判定收敛为单一函数。** `scorer.evaluate_sustainability()` 为纯函数，返回触发明细；`apply_sustainability_penalty` 与 `reporter` 都消费它的输出，不在两处各写一套规则。触发明细经 result dict 的 `sustainability_flags` 键传给展示层——`render_report` 目前收不到 config，展示层无法自行判定，把 flags 放进 result 契约同时消除了这个结构性障碍。
 11. **「近 N 期」不足 N 期时不触发。** 序列长度 < `repeated_periods` 的标的不做连续判定（数据不足而非「未恶化」），避免次新股被误判为健康。
+    **（终审 I1 追加）现金流趋势判据另设锚点门禁**：`cash_yoy_history` 的前段期可能因「去年同季基期缺失或 ≤ 0」被整条剔除，使窗口整体前移到很旧的报告期（实测 601166 兴业银行停在 2024Q1–Q4，全部 2025/2026 期被剔除），此时「近 4 期」名不副实、且文案读起来像当期。故 `cash_repeated` 与 `cash_decline` 仅在 `cash_yoy_history[0]["period"] == latest_period` 时触发；不等或 `latest_period` 缺失（旧缓存、手改数据）即视为数据不足，降级为不触发。**利润侧不加此门禁**：`eps_history` 无基期依赖，且「最新期留空时向前回退到最近一个有效值」是既有文档化语义。其余判据（`negative_cash`、`cash_cover`、利润侧全部、负债侧全部）一概不受影响。
 
 ---
 
@@ -46,17 +47,19 @@
 | `debt_ratio` | `float \| None` | `资产负债率(%)` 最新报告期 |
 | `debt_ratio_yoy` | `float \| None` | `debt_ratio` 相对去年同季的变化，单位 pp |
 | `interest_cover` | `float \| None` | `利息支付倍数` 最新报告期 |
+| `latest_period` | `str \| None` | 帧内最新的报告期（`frame["日期"]` 排序后的最大值），**不看该期各字段是否有值**（终审 I1 追加；无法解析的日期不计）——判定层靠它判断现金流趋势窗口是否陈旧，见决策 11 |
 
 两个 history 的上限均为 8（本次判定窗口为 4，留一倍余量以免调窗口即需升缓存版本）。`debt_ratio` 本身不参与判定，供 `debt_ratio_yoy` 计算与后续展示用。
 
 现有四个键（`eps_growth`、`eps_period`、`op_cash_per_share`、`payout_stmt`）**取值不变**。`eps_growth`/`eps_period` 的实现改为取 `eps_history[0]`，与原先「从新到旧找第一个有效值」的循环结果同值，但实现更简单；**「二者同有同无」的约束保留**。
 
 **剔除规则（重要）**：
-- `cash_yoy_history` 中，去年同季值 **≤ 0 或缺失**的期**整条剔除**——从负值算同比变化率没有意义（从负转正实为改善），不得按 0 或按绝对值处理，也不得让该期参与「近 4 期中 ≥3 期为负」的计数。
+- `cash_yoy_history` 中，去年同季值 **≤ 0 或缺失**的期**整条剔除**——从负值算同比变化率没有意义（从负转正实为改善），不得按 0 或按绝对值处理，也不得让该期参与「近 4 期中 ≥3 期为负」的计数。**该剔除会让窗口整体前移**（最近几期都被剔除时 `[:4]` 停在很旧的期），判定层据此按决策 11 的锚点门禁降级。
 - `debt_ratio_yoy` 在任一同季值缺失时为 `None`。
+- 无法解析的报告期（无 `-` 分隔符）整期跳过（`_period_key` → `None`），不影响其他期与其他字段。
 - 任一新增字段取不到 → 对应键为 `None` 或空列表，**不影响其他键**。
 
-**缓存**：`cache/financial_cache.json` 每条记录新增 `"schema": 2`。读取时无 `schema` 字段（或 `schema` < 2）的条目**视为过期重取**，沿用现有「旧格式条目没有 `eps_period` → 视为过期」的处理方式。首次运行会多一轮年报请求，之后恢复正常。
+**缓存**：`cache/financial_cache.json` 每条记录新增 `"schema": 3`。读取时无 `schema` 字段（或 `schema` < 3）的条目**视为过期重取**，沿用现有「旧格式条目没有 `eps_period` → 视为过期」的处理方式。首次运行会多一轮年报请求，之后恢复正常。（2 → 3 因返回形状新增 `latest_period`。）
 
 ### scorer.py — 红标判定
 
@@ -197,12 +200,14 @@ penalty = min(Σ 各维度最重 penalty, max_penalty)
   - 新字段解析（`eps_history`、`cash_yoy_history`、`debt_ratio`、`debt_ratio_yoy`、`interest_cover`）
   - `cash_yoy_history` 剔除规则：去年同季为负、为零、缺失三种情形均整条剔除，且不计入连续期数
   - `eps_history` 只收录有效值、新→旧、上限 8 条
+  - `latest_period` = 帧内最新报告期（含该期字段全空的情形；终审 I1）；非法报告期（无 `-` 分隔符）整期跳过而不抛错（M1）；基期 ≤0 剔除导致窗口前移时，趋势判据端到端不触发（601166 型）
   - 无 `schema` 字段的旧缓存条目 → 触发重取
   - 单一字段缺失不影响其他字段
 - `tests/test_scorer.py`
   - `evaluate_sustainability`：8 个 key 各自单独触发（含边界：`growth = 0`/`yoy = 0` 不触发、`debt_ratio_yoy = 10.0` 触发、`interest_cover = 2.0` 不触发、`interest_cover = 0` 与负值均不触发）
   - 维度取最重：`eps_repeated` 触发时 `eps_decline` 不出现；`negative_cash` 与 `cash_repeated` 同时成立时只出一条
   - 序列不足 `repeated_periods` 条 → `*_repeated` 不触发，单期判据仍生效
+  - 现金流趋势窗口未锚在最新报告期（`cash_yoy_history[0]["period"] != latest_period`，含 `latest_period` 缺失/None）→ `cash_repeated`/`cash_decline` 不触发，`negative_cash`/`cash_cover`/利润侧/负债侧照常（终审 I1 门禁）
   - 封顶 45：四维度满配的 penalty 为 45（合计 50 被截断）
   - 银行型（`interest_cover=None`、`debt_ratio_yoy` 平稳）→ 空列表
   - 格力型（`interest_cover` 为负）→ 不触发 `interest_cover`

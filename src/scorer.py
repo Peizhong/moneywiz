@@ -250,11 +250,30 @@ def _profit_flags(sustainability: dict, cfg: dict) -> list[dict]:
     return _heaviest(candidates)
 
 
+def _cash_trend_is_current(sustainability: dict) -> bool:
+    """现金流趋势窗口是否锚在**最新报告期**（决策 11 的延伸）。
+
+    数据层会把「去年同季基期缺失或 ≤ 0」的期整条剔除（从负值算变化率没有意义），
+    最近几期都被剔除时，``cash_yoy_history`` 的前 4 条会整体前移到很旧的报告期
+    （实测 601166 兴业银行停在 2024Q1–Q4）。窗口停在两年前 = 没有当期趋势数据
+    = 数据不足，不得按「近 N 期」判定：否则用旧数据扣分，且文案读起来像当期。
+    缺 ``latest_period``（旧缓存、手改数据）同样保守降级。
+    """
+    history = sustainability.get("cash_yoy_history")
+    latest_period = sustainability.get("latest_period")
+    return (
+        bool(history)
+        and isinstance(latest_period, str)
+        and history[0].get("period") == latest_period
+    )
+
+
 def _cashflow_flags(sustainability: dict, cfg: dict) -> list[dict]:
     """现金流维度：绝对水平为负、连续恶化、单期下滑同指现金流走弱 → 取最重一条。
 
     绝对水平的口径固定为最近年报（半年现金流与 TTM 分红不可比），趋势判定
-    改用同季同比（每股经营性现金流是累计 YTD 值，相邻期不可直接比较）。
+    改用同季同比（每股经营性现金流是累计 YTD 值，相邻期不可直接比较）；趋势判据
+    另要求窗口锚在最新报告期（:func:`_cash_trend_is_current`），绝对水平不受影响。
     """
     candidates = []
     op_cash = sustainability.get("op_cash_per_share")
@@ -263,7 +282,8 @@ def _cashflow_flags(sustainability: dict, cfg: dict) -> list[dict]:
             _flag("negative_cash", "cashflow", float(op_cash), cfg["negative_cash_penalty"])
         )
     history = sustainability.get("cash_yoy_history")
-    repeated = _repeated(history, "yoy", cfg)
+    trend_current = _cash_trend_is_current(sustainability)
+    repeated = _repeated(history, "yoy", cfg) if trend_current else None
     if repeated is not None:
         candidates.append(
             _flag(
@@ -271,7 +291,7 @@ def _cashflow_flags(sustainability: dict, cfg: dict) -> list[dict]:
                 cfg["cash_repeated_penalty"], window=cfg["repeated_periods"],
             )
         )
-    latest = _latest(history, "yoy")
+    latest = _latest(history, "yoy") if trend_current else None
     if latest is not None and float(latest) < 0:
         candidates.append(
             _flag("cash_decline", "cashflow", float(latest), cfg["cash_decline_penalty"])
@@ -336,6 +356,11 @@ def evaluate_sustainability(
     边界：``growth < 0`` / ``yoy < 0`` 为严格小于；``debt_ratio_yoy ≥`` 阈值含等号；
     ``interest_cover`` 必须为正且严格小于阈值。任一判据数据缺失 → 该判据不触发，
     其余照常评估；``sustainability`` 为假值或数据全缺 → ``[]``（不可评分，而非健康）。
+    现金流的两条**趋势**判据（``cash_repeated``/``cash_decline``）另要求窗口锚在
+    最新报告期（``cash_yoy_history[0]["period"] == latest_period``）：同季配对被剔除
+    会让窗口整体前移到很旧的期，那等于没有当期趋势数据，按数据不足降级
+    （决策 11 的延伸）；利润侧无此门禁（``eps_history`` 无基期依赖，且「最新期留空
+    时向前回退」是既有语义）。
     """
     if not sustainability:
         return []
