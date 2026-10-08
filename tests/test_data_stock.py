@@ -779,6 +779,24 @@ def _financial_frame():
     )
 
 
+def _financial_frame_extended():
+    """在 _financial_frame 的报告期上加负债列与跨年现金流配对所需的期。"""
+    return pd.DataFrame(
+        {
+            "日期": [
+                "2024-06-30", "2024-12-31",
+                "2025-06-30", "2025-12-31",
+                "2026-03-31", "2026-06-30",
+            ],
+            "净利润增长率(%)": [5.0, 5.0, 4.0, 3.0, -14.7, -12.9],
+            "每股经营性现金流(元)": [0.50, 1.00, 0.40, 2.77, 0.17, 0.80],
+            "资产负债率(%)": [55.0, 56.0, 57.0, 58.0, 60.0, 70.0],
+            "利息支付倍数": [4.0, 4.0, 3.0, 2.5, 2.0, 1.4],
+            "股息发放率(%)": [35.0, 40.0, 45.0, 60.0, 0.1, 30.0],
+        }
+    )
+
+
 def test_financial_health_eps_growth_uses_latest_period(monkeypatch, tmp_path):
     calls = {}
 
@@ -798,6 +816,22 @@ def test_financial_health_eps_growth_uses_latest_period(monkeypatch, tmp_path):
         "eps_period": "2026-06-30",
         "op_cash_per_share": pytest.approx(2.77),
         "payout_stmt": pytest.approx(60.0),
+        # 逐报告期序列（新→旧）：2026 两期缺去年同期基期、其余各期缺更早一年
+        "eps_history": [
+            {"period": "2026-06-30", "growth": pytest.approx(-12.9)},
+            {"period": "2026-03-31", "growth": pytest.approx(-14.7)},
+            {"period": "2025-12-31", "growth": pytest.approx(3.0)},
+            {"period": "2024-12-31", "growth": pytest.approx(5.0)},
+            {"period": "2023-12-31", "growth": pytest.approx(8.0)},
+        ],
+        "cash_yoy_history": [
+            {"period": "2025-12-31", "yoy": pytest.approx(177.0)},
+            {"period": "2024-12-31", "yoy": pytest.approx(100.0 * (1.0 / 1.1 - 1.0))},
+        ],
+        # 帧内没有负债列 → 三键降级为 None
+        "debt_ratio": None,
+        "debt_ratio_yoy": None,
+        "interest_cover": None,
     }
     assert calls["symbol"] == "600015"
     assert int(calls["start_year"]) <= date.today().year - 3  # 只请求近几年的报告
@@ -937,6 +971,142 @@ def test_financial_health_corrupt_cache_rebuilds(monkeypatch, tmp_path):
     )
 
     assert get_financial_health("600015", tmp_path) is not None
+
+
+def test_financial_health_debt_and_history_fields(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        ak, "stock_financial_analysis_indicator",
+        lambda symbol, start_year: _financial_frame_extended(),
+    )
+    out = get_financial_health("600015", tmp_path)
+
+    # 负债：最新期 2026-06-30 = 70.0；去年同季 2025-06-30 = 57.0 → +13.0pp
+    assert out["debt_ratio"] == pytest.approx(70.0)
+    assert out["debt_ratio_yoy"] == pytest.approx(13.0)
+    assert out["interest_cover"] == pytest.approx(1.4)
+    # 序列新→旧
+    assert out["eps_history"][0] == {
+        "period": "2026-06-30",
+        "growth": pytest.approx(-12.9),
+    }
+    assert [e["period"] for e in out["eps_history"]] == [
+        "2026-06-30", "2026-03-31", "2025-12-31",
+        "2025-06-30", "2024-12-31", "2024-06-30",
+    ]
+    # 现金流同季同比（逐报告期，spec 口径）：2026-06-30 0.80 / 2025-06-30 0.40 → +100.0%
+    #                                    2025-12-31 2.77 / 2024-12-31 1.00 → +177.0%
+    #                                    2025-06-30 0.40 / 2024-06-30 0.50 → -20.0%
+    # 2026-03-31 与 2024-12-31 的去年同季缺失（2025-03-31、2023-12-31）→ 整条剔除
+    assert out["cash_yoy_history"] == [
+        {"period": "2026-06-30", "yoy": pytest.approx(100.0)},
+        {"period": "2025-12-31", "yoy": pytest.approx(177.0)},
+        {"period": "2025-06-30", "yoy": pytest.approx(-20.0)},
+    ]
+
+
+def test_financial_health_cash_yoy_excludes_nonpositive_base(monkeypatch, tmp_path):
+    # 去年同季 ≤ 0 → 整条剔除（从负值算变化率没有意义），也不得计入连续期数
+    frame = pd.DataFrame({
+        "日期": ["2025-06-30", "2026-06-30", "2025-12-31", "2026-12-31"],
+        "每股经营性现金流(元)": [-0.5, 0.8, 0.0, 1.0],
+        "净利润增长率(%)": [1.0, 2.0, 3.0, 4.0],
+    })
+    monkeypatch.setattr(
+        ak, "stock_financial_analysis_indicator", lambda symbol, start_year: frame
+    )
+    out = get_financial_health("600015", tmp_path)
+    assert out["cash_yoy_history"] == []
+
+
+def test_financial_health_missing_new_columns_degrade_to_none(monkeypatch, tmp_path):
+    # Review Focus 1：上游帧没有负债列 → None，不得崩溃
+    monkeypatch.setattr(
+        ak, "stock_financial_analysis_indicator", lambda symbol, start_year: _financial_frame()
+    )
+    out = get_financial_health("600015", tmp_path)
+    assert out["debt_ratio"] is None
+    assert out["debt_ratio_yoy"] is None
+    assert out["interest_cover"] is None
+    assert out["eps_history"]  # 有值的仍要给出
+
+
+def test_financial_health_eps_history_skips_non_numeric(monkeypatch, tmp_path):
+    # Review Focus 3：非数值不得进入序列（否则下游 < 0 比较抛 TypeError）
+    frame = _financial_frame()
+    frame["净利润增长率(%)"] = frame["净利润增长率(%)"].astype(object)
+    frame.loc[frame["日期"] == "2026-06-30", "净利润增长率(%)"] = "-"
+    monkeypatch.setattr(
+        ak, "stock_financial_analysis_indicator", lambda symbol, start_year: frame
+    )
+    out = get_financial_health("600015", tmp_path)
+    assert all(isinstance(e["growth"], float) for e in out["eps_history"])
+    assert "2026-06-30" not in [e["period"] for e in out["eps_history"]]
+
+
+def test_financial_health_debt_ratio_yoy_needs_same_period_base(monkeypatch, tmp_path):
+    # 负债率有值但它的去年同季缺失 → 变化量为 None（不按 0 或按更早的期处理）
+    frame = pd.DataFrame({
+        "日期": ["2025-12-31", "2026-03-31", "2026-06-30"],
+        "资产负债率(%)": [65.0, 60.0, 70.0],
+        "每股经营性现金流(元)": [1.0, 0.17, 0.8],
+        "净利润增长率(%)": [3.0, -14.7, -12.9],
+    })
+    monkeypatch.setattr(
+        ak, "stock_financial_analysis_indicator", lambda symbol, start_year: frame
+    )
+
+    out = get_financial_health("600015", tmp_path)
+
+    assert out["debt_ratio"] == pytest.approx(70.0)
+    assert out["debt_ratio_yoy"] is None  # 2025-06-30 不在帧内
+
+
+def test_financial_health_history_capped_at_eight(monkeypatch, tmp_path):
+    # 4 年 ≈ 16 个报告期，两个序列各只保留最近 8 期（spec：判定窗口 4 留一倍余量）
+    periods = [
+        f"{year}-{md}"
+        for year in (2023, 2024, 2025, 2026)
+        for md in ("03-31", "06-30", "09-30", "12-31")
+    ]
+    frame = pd.DataFrame(
+        {
+            "日期": periods,
+            "净利润增长率(%)": [float(index) for index in range(len(periods))],
+            "每股经营性现金流(元)": [1.0 for _ in periods],
+        }
+    )
+    monkeypatch.setattr(
+        ak, "stock_financial_analysis_indicator", lambda symbol, start_year: frame
+    )
+
+    out = get_financial_health("600015", tmp_path)
+
+    assert len(out["eps_history"]) == 8
+    assert out["eps_history"][0]["period"] == "2026-12-31"
+    assert len(out["cash_yoy_history"]) == 8
+    assert out["cash_yoy_history"][0]["period"] == "2026-12-31"
+
+
+def test_financial_health_schema1_cache_entry_refetches(monkeypatch, tmp_path):
+    # Review Focus 2：schema 1 条目（有 eps_period 但无 schema）必须重取
+    calls = []
+
+    def fake(symbol, start_year):
+        calls.append(1)
+        return _financial_frame()
+
+    monkeypatch.setattr(ak, "stock_financial_analysis_indicator", fake)
+
+    cache_path = tmp_path / "financial_cache.json"
+    cache_path.write_text(json.dumps({"stocks": {"600015": {
+        "eps_growth": 1.0, "eps_period": "2026-06-30",
+        "op_cash_per_share": 2.0, "payout_stmt": None,
+        "updated_at": datetime.now().isoformat(),
+    }}}), encoding="utf-8")
+
+    out = get_financial_health("600015", tmp_path)
+    assert len(calls) == 1          # 旧条目被忽略，重取上游
+    assert out["eps_history"]       # 新字段来自重取
 
 
 def test_breaker_persists_across_runs_when_cache_enabled(monkeypatch, tmp_path):

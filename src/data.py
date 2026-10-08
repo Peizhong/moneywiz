@@ -52,6 +52,12 @@ PE_CACHE_FILENAME = "pe_cache.json"
 FINANCIAL_CACHE_FILENAME = "financial_cache.json"
 SINA_INDUSTRY_FILENAME = "sina_industry.json"
 
+# 财务缓存条目结构版本：无 ``schema`` 键或值不同的条目视为过期重新拉取
+# （升级后首轮每只标的会多一轮请求）。
+CACHE_SCHEMA = 2
+# eps_history / cash_yoy_history 的条数上限（判定窗口 4 的一倍余量）。
+HISTORY_LIMIT = 8
+
 FUND_QUOTE_COLUMNS = ("code", "name", "price", "iopv")
 FUND_NAV_COLUMNS = ("date", "close")
 FUND_DIVIDEND_COLUMNS = ("date",)
@@ -1096,41 +1102,103 @@ def _fetch_index_pe_history(index_symbol: str) -> pd.DataFrame | None:
 # ---------------------------------------------------------------------------
 
 
+def _period_key(period: str) -> tuple[int, str]:
+    """报告期 → (年, 月日)，用于配相同季。"""
+    year, rest = period.split("-", 1)
+    return int(year), rest
+
+
+def _pair_same_period(pairs: dict[str, float], periods: list[str]) -> list[dict]:
+    """同季同比序列（新→旧，≤HISTORY_LIMIT）：value(P) / value(P 去年同季) − 1，单位 %。
+
+    基期（去年同季）缺失或 ≤ 0 → 整条剔除；本期非数值（不在 ``pairs`` 里）→ 整条剔除。
+    """
+    out = []
+    for period in periods:
+        value = pairs.get(period)
+        if value is None:
+            continue
+        year, month_day = _period_key(period)
+        base = pairs.get(f"{year - 1}-{month_day}")
+        if base is None or base <= 0:
+            continue
+        out.append({"period": period, "yoy": (value / base - 1.0) * 100.0})
+        if len(out) == HISTORY_LIMIT:
+            break
+    return out
+
+
+def _history_ok(value, value_key: str) -> bool:
+    """缓存里多期序列的形状校验（防手改缓存文件）：[{"period": str, value_key: 数值}]。"""
+    return isinstance(value, list) and all(
+        isinstance(item, dict)
+        and isinstance(item.get("period"), str)
+        and isinstance(item.get(value_key), (int, float))
+        for item in value
+    )
+
+
 def get_financial_health(
     code: str, cache_dir, cache_days: int = 30
 ) -> dict | None:
     """个股财务可持续性指标（缓存 cache_days 天）；失败或无年报行 → None。
 
-    来源 ``stock_financial_analysis_indicator``（新浪，按报告期升序）：
+    来源 ``stock_financial_analysis_indicator``（新浪，按报告期升序，只调用一次）：
 
-    - ``eps_growth``/``eps_period``：**最新报告期**（含中报/季报，从新到旧第一个
-      数值有效的行）的 ``净利润增长率(%)`` 及其报告期——只看年报行会漏掉
-      「年报仍增长、中报已转负」的分红陷阱；累计同比口径本身可比，无季节性；
+    - ``eps_growth``/``eps_period``/``eps_history``：**最新报告期**（含中报/季报，从新到旧
+      第一个数值有效的行）的 ``净利润增长率(%)``、其报告期，以及逐报告期序列
+      （新→旧，≤8 条）——只看年报行会漏掉「年报仍增长、中报已转负」的分红陷阱；
+      累计同比口径本身可比，无季节性；
+    - ``cash_yoy_history``：``每股经营性现金流(元)`` 逐报告期的**同季同比**
+      ``(本期 / 去年同季 − 1) × 100``（新→旧，≤8 条）。每股经营性现金流是累计 YTD 值，
+      相邻期不可直接比较；同季同比可比，且比年报口径早 2～3 个季度发现问题。
+      去年同季缺失或 ≤ 0 → 整条剔除（从负值算变化率没有意义）；
     - ``op_cash_per_share``/``payout_stmt``：最近一个 12-31 年报行的
       ``每股经营性现金流(元)``、``股息发放率(%)``——半年现金流与 TTM 分红不可比，
-      现金流口径固定为年报。
+      现金流**绝对水平**的口径固定为年报（趋势判定见上）；
+    - ``debt_ratio``/``debt_ratio_yoy``/``interest_cover``：``资产负债率(%)`` 的最新
+      有效值、其同季变化（单位 pp，不相除；任一同季值缺失 → None），以及
+      ``利息支付倍数`` 的最新有效值（银行该指标恒缺失 → None）。
 
-    财报季度更新，缓存 ``cache_dir/financial_cache.json``；失败不写缓存。
+    上游缺列或该期非数值 → 对应键降级为 ``None`` / 空列表，不影响其他键。
+    财报季度更新，缓存 ``cache_dir/financial_cache.json``（条目带 ``schema``，
+    旧版本条目视为过期重取）；失败不写缓存。
     """
     cache_path = Path(cache_dir) / FINANCIAL_CACHE_FILENAME
     cache = _load_cache(cache_path, keys=("stocks",))
     entry = cache["stocks"].get(code)
-    if isinstance(entry, dict) and _is_fresh(entry.get("updated_at"), cache_days):
+    numeric_keys = (
+        "eps_growth",
+        "op_cash_per_share",
+        "payout_stmt",
+        "debt_ratio",
+        "debt_ratio_yoy",
+        "interest_cover",
+    )
+    history_keys = {"eps_history": "growth", "cash_yoy_history": "yoy"}
+    if (
+        isinstance(entry, dict)
+        and entry.get("schema") == CACHE_SCHEMA  # 旧 schema 条目 → 视为过期重取
+        and _is_fresh(entry.get("updated_at"), cache_days)
+    ):
         values = {
             key: entry.get(key)
-            for key in ("eps_growth", "eps_period", "op_cash_per_share", "payout_stmt")
+            for key in (*numeric_keys, "eps_period", *history_keys)
         }
         numeric_ok = all(
-            value is None or isinstance(value, (int, float))
-            for key, value in values.items()
-            if key != "eps_period"
+            values[key] is None or isinstance(values[key], (int, float))
+            for key in numeric_keys
         )
         # 旧格式条目没有 eps_period → 视为过期重取；两个字段必须同有同无
         period_ok = values["eps_period"] is None or isinstance(
             values["eps_period"], str
         )
         paired_ok = (values["eps_growth"] is None) == (values["eps_period"] is None)
-        if numeric_ok and period_ok and paired_ok:
+        history_ok = all(
+            _history_ok(values[key], value_key)
+            for key, value_key in history_keys.items()
+        )
+        if numeric_ok and period_ok and paired_ok and history_ok:
             return values
 
     start_year = str(date.today().year - 3)
@@ -1150,21 +1218,71 @@ def get_financial_health(
         value = pd.to_numeric(row[column], errors="coerce")
         return None if pd.isna(value) else float(value)
 
-    # 最新报告期的净利润增长率；个别期留空时向前回退到最近一个有效值
-    eps_growth, eps_period = None, None
-    for _, row in frame.sort_values("日期", ascending=False).iterrows():
-        growth = _value(row, "净利润增长率(%)")
-        if growth is not None:
-            eps_growth, eps_period = growth, str(row["日期"])
-            break
+    # 各报告期的最新有效值：报告期新→旧遍历，同一报告期重复出现时取首行；
+    # 上游缺列或该期非数值 → 该报告期不进字典（下游降级为 None / 剔除）
+    eps_growths: dict[str, float] = {}
+    cash_flows: dict[str, float] = {}
+    debt_ratios: dict[str, float] = {}
+    interest_covers: dict[str, float] = {}
+    rows = frame.sort_values("日期", ascending=False)
+    for _, row in rows.iterrows():
+        period = str(row["日期"])
+        for column, values_by_period in (
+            ("净利润增长率(%)", eps_growths),
+            ("每股经营性现金流(元)", cash_flows),
+            ("资产负债率(%)", debt_ratios),
+            ("利息支付倍数", interest_covers),
+        ):
+            value = _value(row, column)
+            if value is not None and period not in values_by_period:
+                values_by_period[period] = value
+    periods = list(dict.fromkeys(str(period) for period in rows["日期"]))
+
+    # 最新报告期的净利润增长率；个别期留空/非数值时向前回退到最近一个有效值
+    eps_history = [
+        {"period": period, "growth": eps_growths[period]}
+        for period in periods
+        if period in eps_growths
+    ][:HISTORY_LIMIT]
+    # eps_growth/eps_period 与序列首条同源，「同有同无」因此自动成立
+    eps_growth = eps_history[0]["growth"] if eps_history else None
+    eps_period = eps_history[0]["period"] if eps_history else None
+
+    # 负债率/利息支付倍数：新→旧第一个有效值（与 eps_growth 同一回退规则）
+    debt_ratio_period = next(
+        (period for period in periods if period in debt_ratios), None
+    )
+    debt_ratio = (
+        debt_ratios[debt_ratio_period] if debt_ratio_period is not None else None
+    )
+    interest_cover = next(
+        (interest_covers[period] for period in periods if period in interest_covers),
+        None,
+    )
+    # 负债率的同季变化（单位 pp，不相除）；去年同季缺失 → None
+    debt_ratio_yoy = None
+    if debt_ratio_period is not None:
+        year, month_day = _period_key(debt_ratio_period)
+        base = debt_ratios.get(f"{year - 1}-{month_day}")
+        if base is not None:
+            debt_ratio_yoy = debt_ratio - base
 
     result = {
         "eps_growth": eps_growth,
         "eps_period": eps_period,
         "op_cash_per_share": _value(latest_annual, "每股经营性现金流(元)"),
         "payout_stmt": _value(latest_annual, "股息发放率(%)"),
+        "eps_history": eps_history,
+        "cash_yoy_history": _pair_same_period(cash_flows, periods),
+        "debt_ratio": debt_ratio,
+        "debt_ratio_yoy": debt_ratio_yoy,
+        "interest_cover": interest_cover,
     }
-    cache["stocks"][code] = {**result, "updated_at": datetime.now().isoformat()}
+    cache["stocks"][code] = {
+        **result,
+        "schema": CACHE_SCHEMA,
+        "updated_at": datetime.now().isoformat(),
+    }
     _save_cache(cache_path, cache)
     return result
 
