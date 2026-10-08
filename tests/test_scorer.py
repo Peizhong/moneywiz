@@ -272,12 +272,15 @@ def test_evaluate_sustainability_returns_ordered_flags():
         {"eps_growth": -12.9, "op_cash_per_share": 0.5, "cash_cover": 200.0,
          "debt_ratio_yoy": 13.0, "interest_cover": 1.4}, PENALTY_CFG
     )
+    # debt 维度也只取最重一条：两条同为 10 分时取表格在前的 debt_jump
     assert [(f["key"], f["dimension"]) for f in out] == [
-        ("eps_decline", "profit"), ("cash_cover", "coverage"),
-        ("debt_jump", "debt"), ("interest_cover", "debt"),
+        ("eps_decline", "profit"), ("cash_cover", "coverage"), ("debt_jump", "debt"),
     ]
     assert out[0]["value"] == pytest.approx(-12.9)
     assert out[0]["penalty"] == 10.0
+    # 只有利息保障不足时，出的是 interest_cover
+    assert [f["key"] for f in evaluate_sustainability(
+        {"interest_cover": 1.4}, PENALTY_CFG)] == ["interest_cover"]
 
 
 def test_evaluate_sustainability_keeps_one_flag_per_dimension():

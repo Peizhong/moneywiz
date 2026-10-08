@@ -33,16 +33,16 @@ stocks:
 
 
   # 财报红标对总分的扣减（%）：四个维度各自判定，触发明细见 scorer.evaluate_sustainability
+  # 每个维度只取最重一条（维度内各判据标的是同一件事，不重复计入），合计封顶 max_penalty
   #   profit    最新报告期净利润同比下滑（单期 5）；或近 repeated_periods 期中
   #             ≥repeated_min_negative 期为负（连续恶化 15）——二者只取最重一条
   #   cashflow  最近年报每股经营性现金流 ≤ 0（15）；或同季同比连续恶化（15）；
   #             或同季同比单期下滑（5）——三者只取最重一条
   #   coverage  近 12 个月分红 ÷ 经营现金流 > 100%（10）
   #   debt      资产负债率同季同比上升 ≥ debt_jump_threshold pp（10）；利息支付倍数
-  #             为正且 < interest_cover_threshold（10）——两条相互独立，可同时触发。
+  #             为正且 < interest_cover_threshold（10）——二者只取最重一条（同分取前者）。
   #             不用负债率绝对水平：绝对阈值会误报银行（实测 90%+）；银行该指标
   #             「利息支付倍数」恒缺失，故天然豁免
-  # 合计封顶 max_penalty
   sustainability:
     eps_decline_penalty: 5      # 单期下滑（与连续恶化只取最重一条）
     eps_repeated_penalty: 15    # 连续恶化：窗口内 ≥repeated_min_negative 期为负

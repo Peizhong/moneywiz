@@ -102,9 +102,8 @@ DEFAULT_SUSTAINABILITY_PENALTY = {
     "max_penalty": 45.0,  # 合计封顶
 }
 
-# 红标维度与 flags 的输出顺序。维度内「标的是同一件事」的判据互斥、取最重一条
-# （如连续恶化 vs 单期下滑）；唯 debt 的两条（杠杆跳升 / 利息保障）是两件不同的
-# 事，各自独立触发。
+# 红标维度与 flags 的输出顺序。每个维度取最重一条：维度内「标的是同一件事」的判据
+# 互斥（连续恶化 vs 单期下滑、杠杆跳升 vs 利息保障不足），不重复计入。
 _DIMENSIONS = ("profit", "cashflow", "coverage", "debt")
 
 
@@ -224,12 +223,12 @@ def _latest(series: list[dict] | None, key: str) -> float | None:
 
 
 def _heaviest(candidates: list[dict]) -> list[dict]:
-    """同一维度内标的是「同一件事」的候选只留最重一条。
+    """同一维度内只留最重一条（``max`` 取首个最大者）。
 
-    同分时保留构造顺序靠前的那条（更直接/更严重的判据，如
-    「现金流绝对为负」先于「现金流连续恶化」）。
+    平局时保留构造顺序靠前的那条，即更直接/更严重的判据优先
+    （如「现金流绝对为负」先于「现金流连续恶化」、「杠杆跳升」先于「利息保障不足」）。
     """
-    return sorted(candidates, key=lambda flag: flag["penalty"], reverse=True)[:1]
+    return [max(candidates, key=lambda flag: flag["penalty"])] if candidates else []
 
 
 def _profit_flags(sustainability: dict, cfg: dict) -> list[dict]:
@@ -289,18 +288,18 @@ def _coverage_flags(sustainability: dict, cfg: dict) -> list[dict]:
 
 
 def _debt_flags(sustainability: dict, cfg: dict) -> list[dict]:
-    """负债维度：杠杆跳升与利息保障是两件不同的事，各自独立触发（不取最重）。
+    """负债维度：杠杆跳升与利息保障不足高度相关（加杠杆往往同时压低保障）→ 取最重一条。
 
     只看**变化型**判据，不用资产负债率的绝对水平——绝对阈值会被银行
     （实测 90%+）永久误报；银行「利息支付倍数」恒缺失，利息保障判据因此天然
     跳过银行，无需行业分类。
     """
-    flags = []
+    candidates = []
     debt_ratio_yoy = sustainability.get("debt_ratio_yoy")
     if debt_ratio_yoy is not None and float(debt_ratio_yoy) >= float(
         cfg["debt_jump_threshold"]
     ):
-        flags.append(
+        candidates.append(
             _flag("debt_jump", "debt", float(debt_ratio_yoy), cfg["debt_jump_penalty"])
         )
     interest_cover = sustainability.get("interest_cover")
@@ -310,10 +309,10 @@ def _debt_flags(sustainability: dict, cfg: dict) -> list[dict]:
         and float(interest_cover) > 0
         and float(interest_cover) < float(cfg["interest_cover_threshold"])
     ):
-        flags.append(
+        candidates.append(
             _flag("interest_cover", "debt", float(interest_cover), cfg["interest_cover_penalty"])
         )
-    return flags
+    return _heaviest(candidates)
 
 
 _DIMENSION_FLAGS: dict[str, Callable[[dict, dict], list[dict]]] = {
@@ -331,8 +330,8 @@ def evaluate_sustainability(
 
     四个维度 ``profit`` / ``cashflow`` / ``coverage`` / ``debt`` 顺序固定；每条为
     ``{"key", "dimension", "value", "penalty"}``，``*_repeated`` 另带 ``"window"``。
-    维度内标的是同一件事的判据互斥（连续恶化触发时不再叠加单期下滑），
-    ``debt`` 的两条判据相互独立、可同时出现。
+    **每个维度只保留最重一条**——维度内各判据标的是同一件事（连续恶化 vs 单期下滑、
+    杠杆跳升 vs 利息保障不足），不重复计入；平局取构造顺序靠前者。
 
     边界：``growth < 0`` / ``yoy < 0`` 为严格小于；``debt_ratio_yoy ≥`` 阈值含等号；
     ``interest_cover`` 必须为正且严格小于阈值。任一判据数据缺失 → 该判据不触发，
@@ -353,9 +352,9 @@ def apply_sustainability_penalty(
 ) -> tuple[float | None, float]:
     """按财报红标对总分扣分；返回 ``(调整后总分, 实际扣减百分比)``。
 
-    红标明细一律由 ``evaluate_sustainability`` 判定（唯一口径来源），扣减为各维度
-    判定之和（profit / cashflow / coverage 各最多一条，debt 最多两条），并按
-    ``max_penalty`` 封顶。``total`` 为 None 或数据缺失 → 原样返回（0 扣减）。
+    红标明细一律由 ``evaluate_sustainability`` 判定（唯一口径来源），扣减为四个维度
+    各自最重判据之和（每个维度最多一条），并按 ``max_penalty`` 封顶。
+    ``total`` 为 None 或数据缺失 → 原样返回（0 扣减）。
     """
     if total is None or not sustainability:
         return total, 0.0
