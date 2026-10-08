@@ -5,9 +5,23 @@
 
 import pytest
 
-from src.reporter import _competition_ranks, _signals, render_report
+from src.reporter import (
+    _competition_ranks,
+    _signals,
+    ranked_rows,
+    render_detail,
+    render_report,
+)
 
 OUTPUT_CFG = {"buy_top_n": 5, "avoid_bottom_n": 5}
+
+# render_detail 收的是 rules 的**股票段**（main.py 的 interactive.session 传
+# rules["stocks"]），不是整份 rules——这里给最小可用的规则段
+RULES_SECTION = {
+    "indicators": {
+        "dividend_yield": {"weight": 100, "thresholds": {"high": 4.0, "mid": 2.0}},
+    },
+}
 
 STOCK_HEADER = "【股票】"
 FUND_HEADER = "【基金】"
@@ -451,11 +465,11 @@ MARKET = {
 
 def test_sustainability_warnings_join_risk_column():
     result = _result("600015", "华夏银行", 70.0, scores={"dividend_yield": 1.0})
-    result["sustainability"] = {
-        "eps_growth": -12.6,
-        "op_cash_per_share": 0.5,
-        "cash_cover": 200.4,
-    }
+    result["sustainability"] = {"eps_period": None}
+    result["sustainability_flags"] = [
+        {"key": "eps_decline", "dimension": "profit", "value": -12.6, "penalty": 5.0},
+        {"key": "cash_cover", "dimension": "coverage", "value": 200.4, "penalty": 10.0},
+    ]
 
     row = _table_rows(render_report([result], [], OUTPUT_CFG, 1.0), STOCK_HEADER)[0]
 
@@ -465,12 +479,10 @@ def test_sustainability_warnings_join_risk_column():
 
 def test_sustainability_phrase_includes_report_period_label():
     result = _result("600690", "海尔智家", 87.8, scores={"dividend_yield": 1.0})
-    result["sustainability"] = {
-        "eps_growth": -12.9,
-        "eps_period": "2026-06-30",
-        "op_cash_per_share": 2.77,
-        "cash_cover": 41.9,
-    }
+    result["sustainability"] = {"eps_period": "2026-06-30"}
+    result["sustainability_flags"] = [
+        {"key": "eps_decline", "dimension": "profit", "value": -12.9, "penalty": 5.0},
+    ]
 
     row = _table_rows(render_report([result], [], OUTPUT_CFG, 1.0), STOCK_HEADER)[0]
 
@@ -480,8 +492,10 @@ def test_sustainability_phrase_includes_report_period_label():
 def test_sustainability_period_label_mapping():
     from src.reporter import _sustainability_phrases
 
+    flag = {"key": "eps_decline", "dimension": "profit", "value": -5.0, "penalty": 5.0}
+
     def phrase(period):
-        return _sustainability_phrases({"eps_growth": -5.0, "eps_period": period})[0]
+        return _sustainability_phrases([flag], {"eps_period": period})[0]
 
     assert phrase("2026-03-31") == "盈利下滑 5%（2026一季报）"
     assert phrase("2026-06-30") == "盈利下滑 5%（2026中报）"
@@ -489,6 +503,66 @@ def test_sustainability_period_label_mapping():
     assert phrase("2025-12-31") == "盈利下滑 5%（2025年报）"
     assert phrase(None) == "盈利下滑 5%"  # 无报告期 → 退回旧文案
     assert phrase("not-a-date") == "盈利下滑 5%"
+
+
+def test_sustainability_phrases_render_all_keys():
+    from src.reporter import _sustainability_phrases
+
+    def phrase(flag, period=None):
+        return _sustainability_phrases([flag], {"eps_period": period})[0]
+
+    assert phrase({"key": "eps_decline", "value": -13.0}, "2026-06-30") == "盈利下滑 13%（2026中报）"
+    assert phrase({"key": "eps_decline", "value": -13.0}) == "盈利下滑 13%"
+    assert phrase({"key": "eps_repeated", "value": 3, "window": 4}) == "盈利连续下滑 3/4 期"
+    assert phrase({"key": "negative_cash", "value": -0.1}) == "经营现金流为负"
+    assert phrase({"key": "cash_decline", "value": -22.0}) == "现金流下滑 22%"
+    assert phrase({"key": "cash_repeated", "value": 3, "window": 4}) == "现金流连续下滑 3/4 期"
+    assert phrase({"key": "cash_cover", "value": 118.0}) == "分红超现金流 118%"
+    assert phrase({"key": "debt_jump", "value": 12.0}) == "负债率上升 12pp"
+    assert phrase({"key": "interest_cover", "value": 1.4}) == "利息保障 1.4 倍"
+
+
+def test_sustainability_phrases_skip_unknown_and_missing_flags():
+    from src.reporter import _sustainability_phrases
+
+    assert _sustainability_phrases([{"key": "future_key", "value": 1.0}]) == []
+    assert _sustainability_phrases([]) == []
+    assert _sustainability_phrases(None) == []
+
+
+def test_risk_column_holds_six_items():
+    # 4 条可持续性 + 流动性提示 + 高位提示 = 6 项，全部保留（原上限 4 会砍掉后两项）
+    result = _result("600015", "华夏银行", 70.0, scores={"dividend_yield": 1.0})
+    result["sustainability_flags"] = [
+        {"key": "eps_repeated", "dimension": "profit", "value": 3, "window": 4, "penalty": 15.0},
+        {"key": "negative_cash", "dimension": "cashflow", "value": -0.1, "penalty": 15.0},
+        {"key": "cash_cover", "dimension": "coverage", "value": 200.0, "penalty": 10.0},
+        {"key": "debt_jump", "dimension": "debt", "value": 12.0, "penalty": 10.0},
+    ]
+    result["position"] = 82.0     # ≥ POSITION_HIGH → 高位提示
+    result["turnover_wan"] = 1200.0  # < turnover_low(5000) → 流动性提示
+
+    row = _table_rows(
+        render_report([result], [], OUTPUT_CFG, 1.0, risk_hints={"turnover_low": 5000}),
+        STOCK_HEADER,
+    )[0]
+
+    for phrase in ("盈利连续下滑 3/4 期", "经营现金流为负", "分红超现金流 200%",
+                   "负债率上升 12pp", "日均成交 1200万", "120日高位 82%"):
+        assert phrase in row
+
+
+def test_sustainability_none_renders_no_warning():
+    # Review Focus 5：sustainability 与 flags 均缺失 → 三处调用点都不出文案、不崩溃
+    result = _result("000001", "平安银行", 80.0, scores={"dividend_yield": 1.0})
+    result["sustainability"] = None
+    result.pop("sustainability_flags", None)
+
+    report = render_report([result], [], OUTPUT_CFG, 1.0)
+    detail = render_detail(ranked_rows([result], OUTPUT_CFG)[0], RULES_SECTION)
+
+    assert "盈利下滑" not in report and "利息保障" not in report
+    assert "可持续性扣分" not in detail
 
 
 def test_dividend_yield_percentile_highlight_and_risk_text():
@@ -562,16 +636,14 @@ def test_stability_tiers_show_in_highlight_and_risk_columns():
 
 def test_negative_operating_cash_flow_warning():
     result = _result("600015", "华夏银行", 70.0, scores={"dividend_yield": 1.0})
-    result["sustainability"] = {
-        "eps_growth": 5.0,
-        "op_cash_per_share": -0.2,
-        "cash_cover": None,
-    }
+    result["sustainability_flags"] = [
+        {"key": "negative_cash", "dimension": "cashflow", "value": -0.2, "penalty": 15.0},
+    ]
 
     row = _table_rows(render_report([result], [], OUTPUT_CFG, 1.0), STOCK_HEADER)[0]
 
     assert "经营现金流为负" in row
-    assert "盈利下滑" not in row  # 增长为正不提示
+    assert "盈利下滑" not in row  # 无利润维度红标就不提示
 
 
 def test_new_constituent_marker_in_name():
@@ -647,7 +719,7 @@ DETAIL_RULES = {
 }
 
 # 股息率 5.0%（满分档 1.0）× 60 + 连续分红 3 年（0.5 档）× 40
-# → 加权小计 80.0；盈利下滑 → 扣 10% → 总分 72.0
+# → 加权小计 80.0；盈利下滑红标（DETAIL_RULES 下 10%）→ 扣 10% → 总分 72.0
 DETAIL_ITEM = {
     "code": "600036",
     "name": "招商银行",
@@ -664,6 +736,9 @@ DETAIL_ITEM = {
         "op_cash_per_share": 2.0,
         "cash_cover": 50.0,
     },
+    "sustainability_flags": [
+        {"key": "eps_decline", "dimension": "profit", "value": -5.0, "penalty": 10.0},
+    ],
 }
 DETAIL_ROW = {"item": DETAIL_ITEM, "rank": 1, "tied_count": 1, "signal": "买入"}
 
@@ -734,6 +809,7 @@ def test_render_detail_marks_missing_indicator_rows():
         "scores": {"dividend_yield": 1.0},
         "missing": ["dividend_years"],
         "sustainability": None,
+        "sustainability_flags": [],
     }
 
     text = render_detail({"item": item, "rank": 2, "tied_count": 1, "signal": "观察"}, DETAIL_RULES)
@@ -754,6 +830,7 @@ def test_render_detail_without_any_score_states_data_shortage():
         "scores": {},
         "missing": ["dividend_yield", "dividend_years"],
         "sustainability": None,
+        "sustainability_flags": [],
     }
 
     text = render_detail({"item": item, "rank": 3, "tied_count": 1, "signal": "数据不足"}, DETAIL_RULES)

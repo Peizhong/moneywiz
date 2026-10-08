@@ -204,6 +204,7 @@ def _table(results: list[dict], output_cfg: dict, risk_hints: dict | None = None
                     scores,
                     values,
                     item.get("sustainability"),
+                    item.get("sustainability_flags"),
                     high_phrase,
                     _risk_hint_phrases(item, risk_hints),
                 ),
@@ -316,7 +317,11 @@ def render_detail(row: dict, rules_section: dict) -> str:
     else:
         chain = f"加权小计 {pre_total:.1f}"
         if item.get("sustainability"):
-            reason = "、".join(_sustainability_phrases(item["sustainability"]))
+            reason = "、".join(
+                _sustainability_phrases(
+                    item.get("sustainability_flags"), item["sustainability"]
+                )
+            )
             chain += f" → 可持续性扣分 {penalty:.0f}%" + (
                 f"（{reason}）" if reason else ""
             )
@@ -393,15 +398,17 @@ def _risk_text(
     scores: dict,
     values: dict,
     sustainability: dict | None,
+    flags: list[dict] | None,
     high_phrase: str | None,
     hint_phrases: list[str] | None = None,
 ) -> str:
-    """风险列：可持续性警示优先，其后波动/流动性提示、高位提示与零分档指标，最多 4 项。
+    """风险列：红标警示优先，其后流动性提示、高位提示与零分档指标，最多 6 项。
 
-    可持续性警示是财报硬事实（盈利下滑/现金流为负/分红超现金流），比分数档位
-    更值得占用有限的展示空间；无任何内容时为 ``-``。
+    红标文案由 ``sustainability_flags``（``scorer.evaluate_sustainability`` 的
+    输出）渲染，展示层不重判阈值；``sustainability`` 只用于取盈利明细的报告期。
+    财报红标比分数档位更值得占用有限的展示空间；无任何内容时为 ``-``。
     """
-    items = _sustainability_phrases(sustainability)
+    items = _sustainability_phrases(flags, sustainability)
     items.extend(hint_phrases or [])
     if high_phrase:
         items.append(high_phrase)
@@ -410,7 +417,7 @@ def _risk_text(
         for name, tier in scores.items()
         if tier == 0.0
     )
-    return "、".join(items[:4]) if items else "-"
+    return "、".join(items[:6]) if items else "-"
 
 
 def _risk_hint_phrases(item: dict, risk_hints: dict | None) -> list[str]:
@@ -446,26 +453,40 @@ def _report_period_label(period) -> str | None:
     return None
 
 
-def _sustainability_phrases(sustainability: dict | None) -> list[str]:
-    """分红可持续性警示：盈利下滑 / 经营现金流为负 / 分红超现金流。
+def _sustainability_phrases(
+    flags: list[dict] | None, sustainability: dict | None = None
+) -> list[str]:
+    """红标明细（``sustainability_flags``）→ 中文短语，保持 flags 的维度顺序。
 
-    盈利下滑带报告期标注（如「盈利下滑 13%（2026中报）」），便于区分年报与
-    中报口径；现金流类红标固定为年报口径，不加标注。
+    **只做 key → 文案的映射，不判断任何阈值**——阈值口径的唯一来源是
+    :func:`scorer.evaluate_sustainability`，展示层重判一遍就是口径漂移。
+    ``eps_decline`` 的报告期不在 flag 契约里（flag 只有 key/dimension/value/
+    penalty），故从 ``sustainability["eps_period"]`` 取并标注（如「2026中报」），
+    无法识别时不加括号；``eps_repeated``/``cash_repeated`` 的期数取 ``window``。
+    未知 key 跳过（上游新增判据时不至于让报表崩掉）。
     """
-    if not sustainability:
-        return []
+    period = _report_period_label((sustainability or {}).get("eps_period"))
+    suffix = f"（{period}）" if period else ""
     phrases = []
-    eps_growth = sustainability.get("eps_growth")
-    if eps_growth is not None and float(eps_growth) < 0:
-        label = _report_period_label(sustainability.get("eps_period"))
-        suffix = f"（{label}）" if label else ""
-        phrases.append(f"盈利下滑 {abs(float(eps_growth)):.0f}%{suffix}")
-    op_cash = sustainability.get("op_cash_per_share")
-    cash_cover = sustainability.get("cash_cover")
-    if op_cash is not None and float(op_cash) <= 0:
-        phrases.append("经营现金流为负")
-    elif cash_cover is not None and float(cash_cover) > 100:
-        phrases.append(f"分红超现金流 {float(cash_cover):.0f}%")
+    for flag in flags or []:
+        key = flag.get("key")
+        value = flag.get("value")
+        if key == "eps_decline":
+            phrases.append(f"盈利下滑 {abs(float(value)):.0f}%{suffix}")
+        elif key == "eps_repeated":
+            phrases.append(f"盈利连续下滑 {value}/{flag.get('window')} 期")
+        elif key == "negative_cash":
+            phrases.append("经营现金流为负")
+        elif key == "cash_decline":
+            phrases.append(f"现金流下滑 {abs(float(value)):.0f}%")
+        elif key == "cash_repeated":
+            phrases.append(f"现金流连续下滑 {value}/{flag.get('window')} 期")
+        elif key == "cash_cover":
+            phrases.append(f"分红超现金流 {float(value):.0f}%")
+        elif key == "debt_jump":
+            phrases.append(f"负债率上升 {float(value):.0f}pp")
+        elif key == "interest_cover":
+            phrases.append(f"利息保障 {float(value):.1f} 倍")
     return phrases
 
 
