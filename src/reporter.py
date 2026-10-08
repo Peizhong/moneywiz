@@ -146,9 +146,22 @@ def render_report(
     blocks.extend(
         [
             STOCK_HEADER,
-            _table(stock_results, output_cfg, risk_hints, position_window),
+            # 股票位置由前复权 K 线算出 → 全收益口径
+            _table(
+                stock_results,
+                output_cfg,
+                risk_hints,
+                position_window,
+                position_basis="全收益",
+            ),
             FUND_HEADER,
-            _table(fund_results, output_cfg, position_window=position_window),
+            # 基金位置由不复权净值/价格序列算出 → 不加口径词（见 _position_phrases）
+            _table(
+                fund_results,
+                output_cfg,
+                position_window=position_window,
+                position_basis="",
+            ),
             summary,
         ]
     )
@@ -177,10 +190,12 @@ def _table(
     output_cfg: dict,
     risk_hints: dict | None = None,
     position_window: int = 120,
+    position_basis: str = "全收益",
 ) -> str:
     """把一张表渲染成 tabulate 文本；无标的时给出占位符。
 
-    ``position_window`` 透传给位置短语（只影响文案里的窗口数）。
+    ``position_window`` 与 ``position_basis`` 透传给位置短语（只影响文案）。
+    口径词随表而异——股票「全收益」、基金空串，见 ``_position_phrases``。
     """
     if not results:
         return EMPTY_SECTION
@@ -200,7 +215,7 @@ def _table(
         scores = item.get("scores") or {}
         values = item.get("values") or {}
         low_phrase, high_phrase = _position_phrases(
-            item.get("position"), position_window
+            item.get("position"), position_window, position_basis
         )
         rank_text = _rank_text(rank, tied_count)
         name_text = item["name"]
@@ -506,7 +521,7 @@ def _sustainability_phrases(
 
 
 def _position_phrases(
-    position, window: int = 120
+    position, window: int = 120, basis: str = "全收益"
 ) -> tuple[str | None, str | None]:
     """把区间分位转成（亮点追加, 风险追加）。
 
@@ -517,10 +532,16 @@ def _position_phrases(
     非法值（非 int、``bool``、≤0）兜底为 120——排除 ``bool`` 是因为 ``True``
     也是 ``int`` 的实例，不排除会静默渲染成「1日」。
 
-    文案声明「全收益」是有意的：``position`` 由**前复权** K 线算出（除息不是
-    损失，钱以分红形式拿到了；且与最大回撤的含分红总回报口径一致），与波动率、
-    最大回撤、股息率历史分位所用的**不复权**帧不同。四处取数分工是有意的，
-    不是待统一的疏漏——理由见 plan 的「关键口径决策」第 5 条。
+    ``basis`` 是口径词，**股票与基金不同，两张表各自传入**：
+
+    - 股票传「全收益」：``position`` 由**前复权** K 线算出，除息不是损失（钱以
+      分红形式拿到），且与最大回撤的含分红总回报口径一致。这与波动率、最大
+      回撤、股息率历史分位所用的**不复权**帧不同——四处取数分工是有意的，不是
+      待统一的疏漏，理由见 plan 的「关键口径决策」第 5 条。
+    - 基金传空串：``position`` 来自 ``get_fund_nav_history`` 的**不复权**序列
+      （ETF/LOF 是交易所收盘价，``normal`` 型是单位净值，除息日同样下跌），
+      **不是**总回报口径。任何单一实词对两类基金都不成立，故不加口径词——
+      绝不能照抄股票的「全收益」，那是与该序列不符的声明。
     """
     if isinstance(window, bool) or not isinstance(window, int) or window <= 0:
         window = 120
@@ -529,10 +550,10 @@ def _position_phrases(
     except (TypeError, ValueError):
         return None, None
     if value <= POSITION_LOW:
-        return f"{window}日全收益低位 {value:.0f}%", None
+        return f"{window}日{basis}低位 {value:.0f}%", None
     if value >= POSITION_HIGH:
-        return None, f"{window}日全收益高位 {value:.0f}%"
-    return f"{window}日全收益中位 {value:.0f}%", None
+        return None, f"{window}日{basis}高位 {value:.0f}%"
+    return f"{window}日{basis}中位 {value:.0f}%", None
 
 
 def _tech_text(tech: dict | None) -> str:

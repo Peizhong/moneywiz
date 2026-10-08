@@ -912,3 +912,26 @@ def test_render_report_takes_position_window():
     # 不传则走默认值，既有调用方无需改动
     row = _table_rows(render_report([result], [], OUTPUT_CFG, 1.0), STOCK_HEADER)[0]
     assert "120日全收益高位 82%" in row
+
+
+def test_fund_position_phrase_does_not_claim_total_return():
+    """基金 position 来自不复权净值/价格序列（main.py:422），不得声称「全收益」。"""
+    fund = dict(FUND_70, position=82.0)
+
+    row = _table_rows(render_report([], [fund], OUTPUT_CFG, 1.0), FUND_HEADER)[0]
+
+    assert "120日高位 82%" in row
+    assert "全收益" not in row
+
+
+def test_stock_and_fund_tables_use_their_own_position_basis():
+    """同一份报告里两张表的口径词各自正确，互不串味。"""
+    stock = _result("600036", "招商银行", 80.0, scores={"dividend_yield": 1.0})
+    stock["position"] = 82.0
+    fund = dict(FUND_70, position=18.0)
+
+    report = render_report([stock], [fund], OUTPUT_CFG, 1.0)
+
+    assert "120日全收益高位 82%" in _table_rows(report, STOCK_HEADER)[0]
+    assert "120日低位 18%" in _table_rows(report, FUND_HEADER)[0]
+    assert "全收益" not in _table_rows(report, FUND_HEADER)[0]

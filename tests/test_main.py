@@ -815,6 +815,17 @@ def test_run_includes_price_position_in_rows(monkeypatch, config_dir, tmp_path):
     assert "120日全收益低位 0%" in _row_for(report, "招商银行")
 
 
+def test_run_position_window_follows_kline_days(monkeypatch, config_dir, tmp_path):
+    """窗口文案必须随 data.kline_days 走——钉住 main 的透传，否则会静默回归。"""
+    _patch_data(monkeypatch, **_happy_overrides())
+    _write_rules(config_dir, kline_days=60)
+
+    report = main.run(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
+
+    assert "60日全收益高位 100%" in _row_for(report, "平安银行")
+    assert "120日" not in report
+
+
 def test_run_all_sources_failing_reports_insufficient_data(
     monkeypatch, config_dir, tmp_path
 ):
