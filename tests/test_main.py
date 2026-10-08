@@ -551,6 +551,80 @@ def test_run_applies_sustainability_penalty_to_total(monkeypatch, config_dir, tm
     assert "23.8" in _row_for(report, "招商银行")
 
 
+def test_run_exposes_sustainability_flags(monkeypatch, config_dir, tmp_path):
+    def health(code, cache_dir, cache_days=30):
+        return {"eps_growth": -12.6, "eps_period": "2026-06-30",
+                "op_cash_per_share": 0.5, "payout_stmt": None,
+                "eps_history": [], "cash_yoy_history": [],
+                "debt_ratio": 70.0, "debt_ratio_yoy": 13.0, "interest_cover": 1.4}
+
+    _patch_data(monkeypatch, **_happy_overrides(get_financial_health=health))
+
+    scan = main.run_scan(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
+    item = next(r for r in scan["stock_results"] if r["code"] == "000001")
+
+    # debt 维度只取最重一条（spec 决策 7）：debt_jump 与 interest_cover 同为
+    # 默认 10.0 时平局，取候选构造顺序靠前者 → debt_jump。故此处只有三条。
+    assert [f["key"] for f in item["sustainability_flags"]] == [
+        "eps_decline", "cash_cover", "debt_jump",
+    ]
+    assert item["sustainability"]["debt_ratio_yoy"] == pytest.approx(13.0)
+    # 数据层新增字段一律原样透传给判定层
+    assert item["sustainability"]["eps_history"] == []
+    assert item["sustainability"]["cash_yoy_history"] == []
+    assert item["sustainability"]["interest_cover"] == pytest.approx(1.4)
+
+
+def test_run_exposes_repeated_flags_from_passed_through_history(
+    monkeypatch, config_dir, tmp_path
+):
+    """两个序列必须原样透传：丢键时连续恶化判据会静默消失（单期判据仍在）。"""
+    def health(code, cache_dir, cache_days=30):
+        return {"eps_growth": -12.6, "eps_period": "2026-06-30",
+                "op_cash_per_share": 0.5, "payout_stmt": None,
+                "eps_history": [
+                    {"period": "2026-06-30", "growth": -12.9},
+                    {"period": "2026-03-31", "growth": -14.7},
+                    {"period": "2025-12-31", "growth": -3.0},
+                    {"period": "2025-09-30", "growth": 4.0},
+                ],
+                "cash_yoy_history": [
+                    {"period": "2026-06-30", "yoy": -20.0},
+                    {"period": "2025-12-31", "yoy": -10.0},
+                    {"period": "2025-06-30", "yoy": -5.0},
+                    {"period": "2024-12-31", "yoy": 8.0},
+                ],
+                "debt_ratio": 70.0, "debt_ratio_yoy": 13.0, "interest_cover": 1.4}
+
+    _patch_data(monkeypatch, **_happy_overrides(get_financial_health=health))
+
+    scan = main.run_scan(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
+    item = next(r for r in scan["stock_results"] if r["code"] == "000001")
+    flags = {flag["key"]: flag for flag in item["sustainability_flags"]}
+
+    # 两期内各 3 期为负 → 连续恶化（15）压过单期下滑（5），维度内只留最重一条
+    assert flags["eps_repeated"]["dimension"] == "profit"
+    assert flags["eps_repeated"]["value"] == 3
+    assert flags["eps_repeated"]["window"] == 4
+    assert flags["cash_repeated"]["dimension"] == "cashflow"
+    assert flags["cash_repeated"]["value"] == 3
+    assert flags["cash_repeated"]["window"] == 4
+    assert "eps_decline" not in flags and "cash_decline" not in flags
+
+
+def test_run_sustainability_flags_empty_when_health_unavailable(monkeypatch, config_dir, tmp_path):
+    # get_financial_health 返回 None（``_happy_overrides`` 的默认替身是健康数据，
+    # 故此处显式覆盖为 None）→ sustainability 为 None，
+    # flags 必须是空列表而非 None（reporter 依赖这个区分）
+    _patch_data(monkeypatch, **_happy_overrides(get_financial_health=lambda *a, **k: None))
+
+    scan = main.run_scan(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
+    item = next(r for r in scan["stock_results"] if r["code"] == "000001")
+
+    assert item["sustainability"] is None
+    assert item["sustainability_flags"] == []
+
+
 def test_run_scores_dividend_trend(monkeypatch, tmp_path):
     rules = {
         "stocks": {

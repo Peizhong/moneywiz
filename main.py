@@ -60,7 +60,9 @@ def _result(
 ):
     """按 reporter 契约组装单只标的的 result dict。
 
-    总分经分红可持续性红标扣分（rules.yaml 的 stocks.sustainability 可配）。
+    总分经分红可持续性红标扣分（rules.yaml 的 stocks.sustainability 可配）；
+    ``sustainability_flags`` 为触发明细（由 :func:`scorer.evaluate_sustainability`
+    判定，展示层据此渲染，不再自行判阈值），无红标或 ``sustainability`` 为 None → ``[]``。
     """
     score = scorer.score_instrument(values, rules_section)
     total, _penalty = scorer.apply_sustainability_penalty(
@@ -76,6 +78,9 @@ def _result(
         "tech": tech,
         "position": position,
         "sustainability": sustainability,
+        "sustainability_flags": scorer.evaluate_sustainability(
+            sustainability, rules_section.get("sustainability")
+        ),
         "turnover_wan": turnover_wan,
     }
 
@@ -263,11 +268,12 @@ def _stock_result(
 
 
 def _sustainability(code, dividends, as_of, cache_dir, financial_cache_days):
-    """分红可持续性红标：盈利下滑 / 经营现金流为负 / 分红超现金流。
+    """分红可持续性红标：盈利下滑 / 经营现金流为负 / 分红超现金流 / 负债恶化。
 
     数据来自 ``get_financial_health``（带 cache_days 缓存）：盈利下滑按最新报告期
     （含中报/季报）净利润同比，现金流与分红覆盖率按最近年报口径；任一数据缺失
-    只影响对应警示。
+    只影响对应警示。多期序列与负债字段**原样透传**给判定层
+    （``scorer.evaluate_sustainability`` 消费），此处不判断任何阈值。
     """
     health = _fetch(
         lambda: data.get_financial_health(
@@ -287,6 +293,10 @@ def _sustainability(code, dividends, as_of, cache_dir, financial_cache_days):
         "eps_period": health.get("eps_period"),
         "op_cash_per_share": op_cash,
         "cash_cover": cash_cover,
+        "eps_history": health.get("eps_history"),
+        "cash_yoy_history": health.get("cash_yoy_history"),
+        "debt_ratio_yoy": health.get("debt_ratio_yoy"),
+        "interest_cover": health.get("interest_cover"),
     }
 
 
