@@ -507,6 +507,7 @@ def run_scan(
             time.monotonic() - started,
             market=market,
             risk_hints=cfg.rules["stocks"].get("risk_hints"),
+            position_window=kline_days,
         ),
         "stock_results": stock_results,
         "rules": cfg.rules,

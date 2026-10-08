@@ -811,8 +811,8 @@ def test_run_includes_price_position_in_rows(monkeypatch, config_dir, tmp_path):
 
     report = main.run(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
 
-    assert "120日高位 100%" in _row_for(report, "平安银行")
-    assert "120日低位 0%" in _row_for(report, "招商银行")
+    assert "120日全收益高位 100%" in _row_for(report, "平安银行")
+    assert "120日全收益低位 0%" in _row_for(report, "招商银行")
 
 
 def test_run_all_sources_failing_reports_insufficient_data(

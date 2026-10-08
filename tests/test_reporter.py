@@ -295,7 +295,7 @@ def test_high_position_stock_not_marked_buy_and_slot_passes_down():
     rows = _table_rows(report, STOCK_HEADER)
     assert "买入" in rows[0] and "买入" in rows[3]
     assert "观察" in rows[4] and "买入" not in rows[4]
-    assert "120日高位 89%" in rows[4]
+    assert "120日全收益高位 89%" in rows[4]
     assert "买入" in rows[5]  # 空出的名额顺延给第 6 名
 
 
@@ -332,7 +332,7 @@ def test_high_position_in_bottom_zone_still_marked_avoid():
 
     rows = _table_rows(report, STOCK_HEADER)
     assert "末位" in rows[5]  # 高位不影响末位判定
-    assert "120日高位 95%" in rows[5]
+    assert "120日全收益高位 95%" in rows[5]
 
 
 def test_high_position_row_with_oversized_avoid_zone_stays_watch():
@@ -349,7 +349,7 @@ def test_high_position_row_with_oversized_avoid_zone_stays_watch():
 
 def test_buy_eligibility_uses_same_threshold_as_high_position_phrase():
     at_threshold = _result("600001", "甲", 100.0, scores={"dividend_yield": 1.0})
-    at_threshold["position"] = 70.0  # 与「120日高位」同一阈值：≥70 即高位
+    at_threshold["position"] = 70.0  # 与「全收益高位」同一阈值：≥70 即高位
     below = _result("600002", "乙", 90.0, scores={"dividend_yield": 1.0})
     below["position"] = 69.9
 
@@ -358,7 +358,7 @@ def test_buy_eligibility_uses_same_threshold_as_high_position_phrase():
     )
 
     rows = _table_rows(report, STOCK_HEADER)
-    assert "观察" in rows[0] and "120日高位 70%" in rows[0]
+    assert "观察" in rows[0] and "120日全收益高位 70%" in rows[0]
     assert "买入" in rows[1]
 
 
@@ -435,24 +435,24 @@ def test_highlights_and_risks_include_values_and_low_position():
     assert "股息率 4.5%" in row  # 亮点带数值
     assert "派息率 55%" in row
     assert "PE估值 +42%" in row  # 风险带数值（偏离行业为正）
-    assert "120日低位 23%" in row  # 低位并入亮点文字
+    assert "120日全收益低位 23%" in row  # 低位并入亮点文字
 
 
 def test_high_and_middle_position_phrases():
     row = _table_rows(
         render_report([_detailed_result(82.2)], [], OUTPUT_CFG, 1.0), STOCK_HEADER
     )[0]
-    assert "120日高位 82%" in row  # 高位并入风险文字
+    assert "120日全收益高位 82%" in row  # 高位并入风险文字
 
     row = _table_rows(
         render_report([_detailed_result(55.0)], [], OUTPUT_CFG, 1.0), STOCK_HEADER
     )[0]
-    assert "120日中位 55%" in row
+    assert "120日全收益中位 55%" in row
 
     row = _table_rows(
         render_report([_detailed_result(None)], [], OUTPUT_CFG, 1.0), STOCK_HEADER
     )[0]
-    assert "120日" not in row  # 无 K 线数据时不显示位置
+    assert "全收益" not in row  # 无 K 线数据时不显示位置
 
 
 MARKET = {
@@ -548,7 +548,7 @@ def test_risk_column_holds_six_items():
     )[0]
 
     for phrase in ("盈利连续下滑 3/4 期", "经营现金流为负", "分红超现金流 200%",
-                   "负债率上升 12pp", "日均成交 1200万", "120日高位 82%"):
+                   "负债率上升 12pp", "日均成交 1200万", "120日全收益高位 82%"):
         assert phrase in row
 
 
@@ -865,3 +865,50 @@ def test_render_detail_without_any_score_states_data_shortage():
     assert "总分 N/A" in text and "信号 数据不足" in text
     assert "加权小计 N/A" in text  # 不编造分数
     assert "缺失指标：股息率、连续分红（覆盖 0/2）" in text
+
+
+def test_position_phrases_declare_total_return_and_take_window():
+    from src.reporter import _position_phrases
+
+    assert _position_phrases(23.0) == ("120日全收益低位 23%", None)
+    assert _position_phrases(82.0) == (None, "120日全收益高位 82%")
+    assert _position_phrases(55.0) == ("120日全收益中位 55%", None)
+    # 窗口来自参数，不再写死（rules.yaml 的 data.kline_days 是可配置的）
+    assert _position_phrases(23.0, 60) == ("60日全收益低位 23%", None)
+    assert _position_phrases(82.0, 250) == (None, "250日全收益高位 82%")
+
+
+def test_position_phrases_invalid_window_falls_back_to_120():
+    from src.reporter import _position_phrases
+
+    # True 是 int 的实例：不排除会静默渲染成「1日」
+    for bad in (None, 0, -1, "60", 60.5, True):
+        assert _position_phrases(23.0, bad) == ("120日全收益低位 23%", None), bad
+
+
+def test_position_phrases_keeps_tuple_shape_for_signals():
+    """_signals 依赖 [1] is not None 判高位——返回结构是硬约束。"""
+    from src.reporter import _position_phrases
+
+    for value in (0.0, 30.0, 55.0, 70.0, 100.0):
+        low, high = _position_phrases(value)
+        # 低位与中位把文字放第 1 位，只有高位放第 2 位——这条区别就是 _signals 的判据
+        assert isinstance(low, str) or isinstance(high, str)
+        assert (high is not None) == (value >= 70.0), value
+    # 无法转成数值的位置仍须返回二元组且都为 None（不崩溃、不出文案）
+    for bad in (None, "x", [1]):
+        assert _position_phrases(bad) == (None, None)
+
+
+def test_render_report_takes_position_window():
+    result = _result("600036", "招商银行", 80.0, scores={"dividend_yield": 1.0})
+    result["position"] = 82.0
+
+    row = _table_rows(
+        render_report([result], [], OUTPUT_CFG, 1.0, position_window=60), STOCK_HEADER
+    )[0]
+    assert "60日全收益高位 82%" in row
+
+    # 不传则走默认值，既有调用方无需改动
+    row = _table_rows(render_report([result], [], OUTPUT_CFG, 1.0), STOCK_HEADER)[0]
+    assert "120日全收益高位 82%" in row

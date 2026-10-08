@@ -79,7 +79,7 @@ def _signals(
     """逐行分配信号（与 items 对齐）。
 
     买入：按名次顺序发给「有分且非高位」的标的，共 buy_top_n 个标签；处于
-    120 日高位（≥ ``POSITION_HIGH``，与「120日高位」风险短语同一阈值）的标的
+    高位（≥ ``POSITION_HIGH``，与「全收益高位」风险短语同一阈值）的标的
     不占名额，空出的名额由后续标的递补。同分组整组收发——不切开同分，递补时
     标签数可能略超 buy_top_n（与并列超发语义一致）。
     末位/数据不足的判定与位置无关；「数据不足」不占买入/末位名额。
@@ -120,8 +120,13 @@ def render_report(
     elapsed_s: float,
     market: dict | None = None,
     risk_hints: dict | None = None,
+    position_window: int = 120,
 ) -> str:
-    """渲染完整报告：板块温度计（可选）、股票表、基金表、摘要行，以换行连接。"""
+    """渲染完整报告：板块温度计（可选）、股票表、基金表、摘要行，以换行连接。
+
+    ``position_window`` 只用于位置短语的窗口文案（来自 ``data.kline_days``），
+    带默认值以保证既有调用方无需改动。
+    """
     all_results = (*stock_results, *fund_results)
     total = len(all_results)
     no_score = sum(1 for r in all_results if r["total"] is None)
@@ -141,9 +146,9 @@ def render_report(
     blocks.extend(
         [
             STOCK_HEADER,
-            _table(stock_results, output_cfg, risk_hints),
+            _table(stock_results, output_cfg, risk_hints, position_window),
             FUND_HEADER,
-            _table(fund_results, output_cfg),
+            _table(fund_results, output_cfg, position_window=position_window),
             summary,
         ]
     )
@@ -167,8 +172,16 @@ def _market_text(market: dict) -> str:
     return f"【板块温度计】{'，'.join(parts)}" if parts else ""
 
 
-def _table(results: list[dict], output_cfg: dict, risk_hints: dict | None = None) -> str:
-    """把一张表渲染成 tabulate 文本；无标的时给出占位符。"""
+def _table(
+    results: list[dict],
+    output_cfg: dict,
+    risk_hints: dict | None = None,
+    position_window: int = 120,
+) -> str:
+    """把一张表渲染成 tabulate 文本；无标的时给出占位符。
+
+    ``position_window`` 透传给位置短语（只影响文案里的窗口数）。
+    """
     if not results:
         return EMPTY_SECTION
 
@@ -186,7 +199,9 @@ def _table(results: list[dict], output_cfg: dict, risk_hints: dict | None = None
         has_score = total is not None
         scores = item.get("scores") or {}
         values = item.get("values") or {}
-        low_phrase, high_phrase = _position_phrases(item.get("position"))
+        low_phrase, high_phrase = _position_phrases(
+            item.get("position"), position_window
+        )
         rank_text = _rank_text(rank, tied_count)
         name_text = item["name"]
         if item.get("new_constituent"):
@@ -490,21 +505,34 @@ def _sustainability_phrases(
     return phrases
 
 
-def _position_phrases(position) -> tuple[str | None, str | None]:
-    """把 120 日区间分位转成（亮点追加, 风险追加）。
+def _position_phrases(
+    position, window: int = 120
+) -> tuple[str | None, str | None]:
+    """把区间分位转成（亮点追加, 风险追加）。
 
     ≤30 视为低位（亮点），≥70 视为高位（风险），中间档以中性文字并入亮点；
-    ``position`` 缺失/非法 → 都不追加（如无 K 线数据的标的）。
+    ``position`` 无法转成数值 → 都不追加（如无 K 线数据的标的）。
+
+    ``window`` 只影响文案里的窗口数（来自 ``data.kline_days``），不参与判定；
+    非法值（非 int、``bool``、≤0）兜底为 120——排除 ``bool`` 是因为 ``True``
+    也是 ``int`` 的实例，不排除会静默渲染成「1日」。
+
+    文案声明「全收益」是有意的：``position`` 由**前复权** K 线算出（除息不是
+    损失，钱以分红形式拿到了；且与最大回撤的含分红总回报口径一致），与波动率、
+    最大回撤、股息率历史分位所用的**不复权**帧不同。四处取数分工是有意的，
+    不是待统一的疏漏——理由见 plan 的「关键口径决策」第 5 条。
     """
+    if isinstance(window, bool) or not isinstance(window, int) or window <= 0:
+        window = 120
     try:
         value = float(position)
     except (TypeError, ValueError):
         return None, None
     if value <= POSITION_LOW:
-        return f"120日低位 {value:.0f}%", None
+        return f"{window}日全收益低位 {value:.0f}%", None
     if value >= POSITION_HIGH:
-        return None, f"120日高位 {value:.0f}%"
-    return f"120日中位 {value:.0f}%", None
+        return None, f"{window}日全收益高位 {value:.0f}%"
+    return f"{window}日全收益中位 {value:.0f}%", None
 
 
 def _tech_text(tech: dict | None) -> str:
