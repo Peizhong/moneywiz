@@ -7,7 +7,8 @@
 #   docker run --rm moneywiz
 # 容器内跑测试：
 #   docker run --rm moneywiz pytest
-# 说明：镜像内的 cache 是构建时的快照（24 小时 TTL 到期后自动重新拉取）；
+# 说明：镜像内的 cache 是构建时的快照（各档 TTL 到期后自动重新拉取，行情与
+# 最新净值不缓存、每次都重新取）；
 # 容器内新增的缓存随 --rm 消失，需要持久化时自行挂载或改用 docker commit。
 FROM python:3.12-slim
 

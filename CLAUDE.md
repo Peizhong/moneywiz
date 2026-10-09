@@ -45,14 +45,18 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt -r requiremen
 
 | 缓存 | 存放 | 有效期 |
 |---|---|---|
-| 通用取数（行情/K线/分红/基金/指数PE/国债） | `cache/market_cache.db`（SQLite） | `market_cache_hours`（默认 24h） |
+| 通用取数·**实时档**（个股/ETF 行情、最新净值） | `cache/market_cache.db`（SQLite） | `quote_cache_minutes`（默认 **0 = 不缓存**，每次运行都取） |
+| 通用取数·**日频档**（K线、基金净值、指数PE、指数股息率、10Y国债） | 同上 | `daily_cache_hours`（默认 6h） |
+| 通用取数·**慢变档**（分红明细、基金分红、基金概况） | 同上 | `slow_cache_days`（默认 7d） |
 | 东财熔断判定 | 同上（键 `state:eastmoney_quotes_down`） | 30 分钟 |
 | 行业 PE/PB | `cache/pe_cache.json` | `pe_cache_days`（7d） |
 | 年报可持续性 | `cache/financial_cache.json` | `financial_cache_days`（30d） |
 | 新浪行业反查表（代码→行业 + 行业中位数）| `cache/sina_industry.json` | `pe_cache_days`（7d，与行业 PE 共用）|
 | 成分股名单（多指数，各自独立）| `config/dividend_index.yaml` 的 `updated_at` | `index_refresh_days`（14d） |
 
-新增取数函数用 `_cached(key, fetch)` 包装：只缓存非 None 结果；键对 live 参数必须稳定（如 kline 用 `live` 而非日期）。`src/cache.py` 的 `Cache` 负责 SQLite 读写，并把 `read_json` 会把整数值浮点列推断成 int64 的问题还原为 float64。
+新增取数函数用 `_cached(key, fetch, tier)` 包装：**tier 必填**（`TTL_LIVE`/`TTL_DAILY`/`TTL_SLOW`，模块常量）——缓存多久是取数语义的一部分，新增取数必须自己声明属于哪档，不接受默认值；只缓存非 None 结果，TTL ≤ 0 的档不读也不写。键对 live 参数必须稳定（如 kline 用 `live` 而非日期）。分档只决定缓存时长，**不改变任何指标口径**。`src/cache.py` 的 `Cache` 负责 SQLite 读写（只管按 key 存取 + 判过期），并把 `read_json` 会把整数值浮点列推断成 int64 的问题还原为 float64。
+
+**改档位前先看这一条**：个股分红明细在慢变档（7d）是安全的，不是疏漏——TTM 口径下除息日前后分红合计近似不变（新分红进入窗口的同时去年同期滚出），缓存期内不会把股息率系统性算偏。把行情（`spot`/`fund_quotes`/`fund_latest_nav`）挪出实时档则会让股息率、折溢价用上旧价格。
 
 ## Testing
 
@@ -60,7 +64,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt -r requiremen
 - `tests/conftest.py` 的 autouse fixture 每个测试前后重置 data 层运行时状态（熔断标记 + 取数缓存）——新增模块级状态时要同步加入。
 - 交互式测试（`tests/test_interactive.py`）全部打桩 `questionary.select`（脚本化的问答序列），不碰真实终端；CLI 用例显式传 `main.main([])`——`argv=None` 会去解析 pytest 自己的命令行。
 - main 级测试把自选/规则/成分股写进 `tmp_path` 的临时 config 目录（fixture `config_dir`）；**不得依赖仓库 `config/` 的内容**（那是用户随时会改的数据，断言内容会让测试在正常使用中变红）。
-- 性能基准（当前 3 个指数去重 130 只，rules.yaml `candidate_top_n: 80` 裁到 80 只后扫描；未裁剪时约 6 分钟）：冷启动数分钟（行业 PE 走新浪回退时全量扫描最慢）；暖缓存 ~2 秒（24h 缓存 + 持久化熔断生效）。
+- 性能基准（当前 3 个指数去重 130 只，rules.yaml `candidate_top_n: 80` 裁到 80 只后扫描；未裁剪时约 6 分钟）：冷启动数分钟（行业 PE 走新浪回退时全量扫描最慢）；暖缓存 ~2 秒（日频/慢变档命中 + 持久化熔断生效；行情与最新净值每次运行仍会重新取，多 1~2 次批量请求）。
 
 ## Conventions
 
