@@ -52,6 +52,14 @@ PE_CACHE_FILENAME = "pe_cache.json"
 FINANCIAL_CACHE_FILENAME = "financial_cache.json"
 SINA_INDUSTRY_FILENAME = "sina_industry.json"
 
+# 新浪行业反查表依次扫描的分类（顺序即优先级）。两套都不全，故都要：
+# 「行业」（证监会）覆盖面广，但新浪该节点集已损坏——hangye_ZC14 挂着「食品制造业」
+# 的名、成员却是制鞋股，伊利股份等候选股在 84 个板块里一只都查不到；「新浪行业」
+# 补上其中一部分。先扫的优先，已能解析的个股不受影响。
+SINA_INDICATORS = ("行业", "新浪行业")
+# 反查表结构版本：无 schema 键或值不同的缓存视为过期重建（2 = 加第二套分类）。
+SINA_CACHE_SCHEMA = 2
+
 # 财务缓存条目结构版本：无 ``schema`` 键或值不同的条目视为过期重新拉取
 # （升级后首轮每只标的会多一轮请求）。3 = 新增 latest_period（返回形状变化）。
 CACHE_SCHEMA = 3
@@ -598,6 +606,10 @@ def get_industry_pe_pb(
     剔除缺失值与非正值后取中位数；某字段无有效值则为 None（仍返回行业名）。
     个股→行业映射与行业中位数分别缓存于 ``cache_dir/pe_cache.json``，
     两者 TTL 均为 cache_days。
+
+    东财不可用时回退 ``_sina_industry_pe_pb``：新浪的两套行业分类**都不全**
+    （详见 ``SINA_INDICATORS``），因此两套都扫、先扫的优先；两套都查不到的个股
+    返回 None，对应个股的 PE/PB 估值按数据不足处理（日志有该只的 warning）。
     """
     cache_path = Path(cache_dir) / PE_CACHE_FILENAME
     cache = _load_cache(cache_path)
@@ -675,47 +687,53 @@ def _sina_industry_tables(cache_dir, cache_days: int) -> dict | None:
     """新浪行业反查表（缓存 cache_days 天）。
 
     返回 ``{"stocks": {代码: 板块}, "medians": {板块: {"pe", "pb"}}}``。
-    首次构建需扫描全部行业板块（约 1-2 分钟，注意其成分股自带 ``per``/``pb``），
-    失败 → None（调用方按数据不足处理）。
+    依次扫描 ``SINA_INDICATORS`` 的两套分类（成分股自带 ``per``/``pb``，首次构建
+    约 2-3 分钟）；**先扫的优先**——已能解析的个股不因新增分类而改变结果。
+    某一套不可用只跳过该套；两套都不成 → None（调用方按数据不足处理）。
     """
     cache_path = Path(cache_dir) / SINA_INDUSTRY_FILENAME
     cached = _load_sina_industry(cache_path)
     if cached is not None and _is_fresh(cached.get("updated_at"), cache_days):
         return cached
 
-    logger.warning("首次构建新浪行业表（扫描全部行业板块，约 1-2 分钟）…")
-    sectors = _call(ak.stock_sector_spot, indicator="行业")
-    if (
-        sectors is None
-        or sectors.empty
-        or "label" not in sectors.columns
-        or "板块" not in sectors.columns
-    ):
-        return None
-
+    logger.warning("首次构建新浪行业表（扫描两套行业分类，约 2-3 分钟）…")
     stocks: dict[str, str] = {}
     medians: dict[str, dict] = {}
     scanned = 0
-    for row in sectors.itertuples():
-        label, name = str(getattr(row, "label", "")), str(getattr(row, "板块", ""))
-        if not label or not name:
+    for indicator in SINA_INDICATORS:
+        sectors = _call(ak.stock_sector_spot, indicator=indicator)
+        if (
+            sectors is None
+            or sectors.empty
+            or "label" not in sectors.columns
+            or "板块" not in sectors.columns
+        ):
+            logger.warning("新浪「%s」行业分类不可用，跳过该套", indicator)
             continue
-        detail = _call(ak.stock_sector_detail, sector=label)
-        if detail is None or detail.empty:
-            continue
-        scanned += 1
-        for detail_row in detail.itertuples():
-            stock_code = str(getattr(detail_row, "code", "") or "")
-            if stock_code:
-                stocks[stock_code] = name
-        medians[name] = {
-            "pe": _positive_median(detail, "per"),
-            "pb": _positive_median(detail, "pb"),
-        }
+        for row in sectors.itertuples():
+            label, name = str(getattr(row, "label", "")), str(getattr(row, "板块", ""))
+            if not label or not name:
+                continue
+            detail = _call(ak.stock_sector_detail, sector=label)
+            if detail is None or detail.empty:
+                continue
+            scanned += 1
+            for detail_row in detail.itertuples():
+                stock_code = str(getattr(detail_row, "code", "") or "")
+                if stock_code:
+                    stocks.setdefault(stock_code, name)  # 先扫的分类优先
+            medians.setdefault(
+                name,
+                {
+                    "pe": _positive_median(detail, "per"),
+                    "pb": _positive_median(detail, "pb"),
+                },
+            )
     if scanned == 0:
         return None
 
     payload = {
+        "schema": SINA_CACHE_SCHEMA,
         "updated_at": datetime.now().isoformat(),
         "stocks": stocks,
         "medians": medians,
@@ -726,9 +744,11 @@ def _sina_industry_tables(cache_dir, cache_days: int) -> dict | None:
 
 
 def _load_sina_industry(path: Path) -> dict | None:
-    """读取新浪行业缓存；缺失、损坏或形状不符 → None（触发重建）。"""
+    """读取新浪行业缓存；缺失、损坏、形状不符或 schema 过期 → None（触发重建）。"""
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
+        if raw.get("schema") != SINA_CACHE_SCHEMA:
+            return None  # 旧表缺第二套分类，必须重建
         if not isinstance(raw.get("stocks"), dict) or not isinstance(
             raw.get("medians"), dict
         ):

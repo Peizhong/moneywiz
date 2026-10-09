@@ -347,7 +347,19 @@ def test_missing_industry_returns_none(monkeypatch, tmp_path, info_frame):
 # ---------------------------------------------------------------------------
 
 
-def _sina_sectors_frame():
+def _sina_sectors_frame(indicator):
+    """两套分类的板块列表：证监会行业（第一套）与新浪行业（第二套）。
+
+    两套都不全：第一套覆盖面广但漏掉部分个股（实测含伊利股份），第二套补漏。
+    """
+    if indicator == "新浪行业":
+        return pd.DataFrame(
+            {
+                "label": ["new_sphy", "new_swzz"],
+                "板块": ["食品行业", "生物制药"],
+                "公司家数": [58, 155],
+            }
+        )
     return pd.DataFrame(
         {
             "label": ["hangye_ZA01", "hangye_ZC27"],
@@ -370,11 +382,11 @@ def _sina_detail_frame(entries):
 
 
 def _patch_sina(monkeypatch):
-    calls = {"sectors": 0, "detail": []}
+    calls = {"sectors": [], "detail": []}
 
     def fake_sectors(indicator):
-        calls["sectors"] += 1
-        return _sina_sectors_frame()
+        calls["sectors"].append(indicator)
+        return _sina_sectors_frame(indicator)
 
     def fake_detail(sector):
         calls["detail"].append(sector)
@@ -383,6 +395,9 @@ def _patch_sina(monkeypatch):
                 [("600108", 30.0, 1.5), ("600109", 10.0, 0.5), ("600110", -5.0, None)]
             ),
             "hangye_ZC27": _sina_detail_frame([("000001", 5.0, 0.6)]),
+            "new_sphy": _sina_detail_frame([("600887", 12.0, 2.0), ("600873", 8.0, 1.0)]),
+            # 600108 两套都有：第一套（农业）必须胜出，改动不得影响已能解析的个股
+            "new_swzz": _sina_detail_frame([("600108", 99.0, 9.0)]),
         }[sector]
 
     monkeypatch.setattr(ak, "stock_sector_spot", fake_sectors)
@@ -416,7 +431,9 @@ def test_sina_fallback_builds_table_and_returns_medians(monkeypatch, tmp_path):
 
     # 农业：PE 中位数 median(30, 10)（-5 被剔除）= 20；PB median(1.5, 0.5) = 1.0
     assert out == {"industry": "农业", "pe": 20.0, "pb": 1.0}
-    assert calls["sectors"] == 1 and len(calls["detail"]) == 2  # 84 行业扫描的缩影
+    # 两套分类各扫一遍板块列表（84 + 49 个板块的缩影）
+    assert calls["sectors"] == ["行业", "新浪行业"]
+    assert len(calls["detail"]) == 4
     assert (tmp_path / "sina_industry.json").exists()
 
 
@@ -432,7 +449,7 @@ def test_sina_table_is_cached_across_calls(monkeypatch, tmp_path):
     out = get_industry_pe_pb("000001", tmp_path)
 
     assert out == {"industry": "医药制造业", "pe": 5.0, "pb": 0.6}
-    assert calls["sectors"] == 1  # 仍然只扫过一次
+    assert calls["sectors"] == ["行业", "新浪行业"]  # 仍然只扫过一遍
 
 
 def test_sina_fallback_unavailable_returns_none(monkeypatch, tmp_path):
@@ -440,3 +457,36 @@ def test_sina_fallback_unavailable_returns_none(monkeypatch, tmp_path):
     # _patch_ak 已把 stock_sector_spot 打桩为失败 → 新浪也不可用
 
     assert get_industry_pe_pb("600108", tmp_path) is None
+
+
+def test_sina_second_taxonomy_covers_codes_missing_from_first(monkeypatch, tmp_path):
+    """证监会行业表查不到的代码（实测含 600887 伊利股份）回落到新浪行业表。"""
+    _patch_ak(monkeypatch, info_exc=ConnectionError("东财不可用"))
+    _patch_sina(monkeypatch)
+
+    out = get_industry_pe_pb("600887", tmp_path)
+
+    # 食品行业：PE median(12, 8) = 10；PB median(2, 1) = 1.5
+    assert out == {"industry": "食品行业", "pe": 10.0, "pb": 1.5}
+
+
+def test_sina_cache_without_schema_is_rebuilt(monkeypatch, tmp_path):
+    """改动前写入的旧表没有第二套分类 → 无 schema 键的缓存必须重建。"""
+    _patch_ak(monkeypatch, info_exc=ConnectionError("东财不可用"))
+    calls = _patch_sina(monkeypatch)
+    (tmp_path / "sina_industry.json").write_text(
+        json.dumps(
+            {
+                "updated_at": datetime.now().isoformat(),
+                "stocks": {"600108": "农业"},
+                "medians": {"农业": {"pe": 20.0, "pb": 1.0}},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    out = get_industry_pe_pb("600887", tmp_path)
+
+    assert out == {"industry": "食品行业", "pe": 10.0, "pb": 1.5}
+    assert calls["sectors"] == ["行业", "新浪行业"]  # 旧表被丢弃，两套都重扫

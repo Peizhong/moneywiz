@@ -36,7 +36,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt -r requiremen
 
 ### 数据源回退与熔断（重要）
 
-- 东财 `push2*.eastmoney.com` 会按出口 IP 拒绝请求（海外实测：TLS 握手成功后连接被断）。东财失败时的回退链：股票行情/K线 → 腾讯（`qt.gtimg.cn`、`web.ifzq.gtimg.cn` 前复权）→ **K 线再回退新浪**（`ak.stock_zh_a_daily`，前复权/不复权都走它；腾讯一次失败即跳过本轮 `_tencent_kline_down`，如 501 限流时避免逐只重试）；ETF/LOF 行情 → 腾讯（价格；无 IOPV，折溢价退化为「最新净值」日频代理）；基金历史 → 单位净值走势（`fund_open_fund_info_em`）；**行业 PE/PB → 新浪行业板块**（成分股自带 `per`/`pb`，首次全量扫描约 1-2 分钟，见缓存分层）。东财已不是任何指标的必需源。
+- 东财 `push2*.eastmoney.com` 会按出口 IP 拒绝请求（海外实测：TLS 握手成功后连接被断）。东财失败时的回退链：股票行情/K线 → 腾讯（`qt.gtimg.cn`、`web.ifzq.gtimg.cn` 前复权）→ **K 线再回退新浪**（`ak.stock_zh_a_daily`，前复权/不复权都走它；腾讯一次失败即跳过本轮 `_tencent_kline_down`，如 501 限流时避免逐只重试）；ETF/LOF 行情 → 腾讯（价格；无 IOPV，折溢价退化为「最新净值」日频代理）；基金历史 → 单位净值走势（`fund_open_fund_info_em`）；**行业 PE/PB → 新浪行业板块**（成分股自带 `per`/`pb`，首次全量扫描约 2-3 分钟，见缓存分层）。新浪两套分类都要扫（`SINA_INDICATORS`）：证监会行业那套覆盖面广但新浪侧节点已损坏——`hangye_ZC14` 挂着「食品制造业」的名、成员却是制鞋股，**伊利股份这类个股在 84 个板块里一只都查不到**，故再扫「新浪行业」补漏，先扫的优先（已能解析的个股结果不变）。两套都查不到 → 该股 PE/PB 估值按数据不足处理；改了这套逻辑记得升 `SINA_CACHE_SCHEMA`，否则旧表会继续用满 7 天。东财已不是任何指标的必需源。
 - 东财任一行情调用失败 → 熔断 30 分钟（持久化），期间直接走回退源/按数据不足处理，不再重复重试。运行开始时 `reset_quote_source_state()` 读取持久化判定。
 - 熔断在源码里的名字：`src/data.py` 的 `_eastmoney_quotes_down`；跳过点分散在各取数函数（搜索「已熔断」）。
 - 回退提示一律经 `_log_fallback_once(key, level, msg, ...)`（每种消息一个 key）：熔断后逐只标的重复输出会刷屏，同类只保留首条（含首只代码），`reset_quote_source_state()` 时清空。新增回退日志不要用裸 `logger.*`。
@@ -51,7 +51,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt -r requiremen
 | 东财熔断判定 | 同上（键 `state:eastmoney_quotes_down`） | 30 分钟 |
 | 行业 PE/PB | `cache/pe_cache.json` | `pe_cache_days`（7d） |
 | 年报可持续性 | `cache/financial_cache.json` | `financial_cache_days`（30d） |
-| 新浪行业反查表（代码→行业 + 行业中位数）| `cache/sina_industry.json` | `pe_cache_days`（7d，与行业 PE 共用）|
+| 新浪行业反查表（代码→行业 + 行业中位数，两套分类合并）| `cache/sina_industry.json` | `pe_cache_days`（7d，与行业 PE 共用；带 `schema`，升版本即整表重扫）|
 | 成分股名单（多指数，各自独立）| `config/dividend_index.yaml` 的 `updated_at` | `index_refresh_days`（14d） |
 
 新增取数函数用 `_cached(key, fetch, tier)` 包装：**tier 必填**（`TTL_LIVE`/`TTL_DAILY`/`TTL_SLOW`，模块常量）——缓存多久是取数语义的一部分，新增取数必须自己声明属于哪档，不接受默认值；只缓存非 None 结果，TTL ≤ 0 的档不读也不写。键对 live 参数必须稳定（如 kline 用 `live` 而非日期）。分档只决定缓存时长，**不改变任何指标口径**。`src/cache.py` 的 `Cache` 负责 SQLite 读写（只管按 key 存取 + 判过期），并把 `read_json` 会把整数值浮点列推断成 int64 的问题还原为 float64。
