@@ -10,6 +10,7 @@ import akshare as ak
 import pandas as pd
 import pytest
 
+from src import data
 from src.data import (
     SUPPORTED_INDEX_PE,
     get_fund_dividend_history,
@@ -478,6 +479,98 @@ def test_index_pe_history_empty_source_returns_empty_frame_with_columns(monkeypa
 
     assert out is not None and out.empty
     assert list(out.columns) == ["date", "pe"]
+
+
+# ---------------------------------------------------------------------------
+# 取数缓存分档（configure_cache）：live 每次运行都取 / daily 日频 / slow 慢变
+# ---------------------------------------------------------------------------
+
+
+def test_fund_tier_ttls_are_independent(monkeypatch, tmp_path):
+    """行情=实时、净值=日频、分红/概况=慢变；本次 daily 设长、live/slow 设 0。"""
+    counts = {"quotes": 0, "nav": 0, "dividend": 0, "overview": 0}
+
+    def fake_spot():
+        counts["quotes"] += 1
+        return _etf_quote_frame()
+
+    def fake_hist(**kwargs):
+        counts["nav"] += 1
+        return _fund_hist_frame([("2026-09-30", 3.05)])
+
+    def fake_detail(**kwargs):
+        counts["dividend"] += 1
+        return _fund_dividend_frame()
+
+    def fake_overview(**kwargs):
+        counts["overview"] += 1
+        return _overview_frame()
+
+    monkeypatch.setattr(ak, "fund_etf_spot_em", fake_spot)
+    monkeypatch.setattr(ak, "fund_etf_hist_em", fake_hist)
+    monkeypatch.setattr(ak, "fund_open_fund_info_em", fake_detail)
+    monkeypatch.setattr(ak, "fund_overview_em", fake_overview)
+    data.configure_cache(tmp_path, live_seconds=0, daily_seconds=10**9, slow_seconds=0)
+
+    for _ in range(2):
+        get_fund_quotes("etf", [ETF_CODE])
+        get_fund_nav_history(ETF_CODE, "etf")
+        get_fund_dividend_history(ETF_CODE)
+        get_fund_overview(ETF_CODE)
+
+    assert counts == {"quotes": 2, "nav": 1, "dividend": 2, "overview": 2}
+
+
+def test_fund_live_and_slow_tiers_cache_when_ttl_positive(monkeypatch, tmp_path):
+    """live/slow 设长、daily 设 0 → 行情/最新净值/分红/概况命中，净值与指数 PE 不命中。"""
+    counts = {"quotes": 0, "latest_nav": 0, "dividend": 0, "overview": 0, "nav": 0, "pe": 0}
+
+    def fake_spot():
+        counts["quotes"] += 1
+        return _etf_quote_frame()
+
+    def fake_open_fund(**kwargs):
+        if kwargs.get("indicator") == "分红送配详情":
+            counts["dividend"] += 1
+            return _fund_dividend_frame()
+        counts["latest_nav"] += 1
+        return _open_fund_nav_frame()
+
+    def fake_overview(**kwargs):
+        counts["overview"] += 1
+        return _overview_frame()
+
+    def fake_hist(**kwargs):
+        counts["nav"] += 1
+        return _fund_hist_frame([("2026-09-30", 3.05)])
+
+    def fake_pe(**kwargs):
+        counts["pe"] += 1
+        return _index_pe_frame()
+
+    monkeypatch.setattr(ak, "fund_etf_spot_em", fake_spot)
+    monkeypatch.setattr(ak, "fund_open_fund_info_em", fake_open_fund)
+    monkeypatch.setattr(ak, "fund_overview_em", fake_overview)
+    monkeypatch.setattr(ak, "fund_etf_hist_em", fake_hist)
+    monkeypatch.setattr(ak, "stock_index_pe_lg", fake_pe)
+    data.configure_cache(tmp_path, live_seconds=10**9, daily_seconds=0, slow_seconds=10**9)
+
+    for _ in range(2):
+        get_fund_quotes("etf", [ETF_CODE])
+        get_fund_latest_nav(NORMAL_CODE)
+        get_fund_dividend_history(ETF_CODE)
+        get_fund_overview(ETF_CODE)
+        get_fund_nav_history(ETF_CODE, "etf")
+        get_index_pe_history("上证红利")
+
+    assert counts == {
+        "quotes": 1,
+        "latest_nav": 1,
+        "dividend": 1,
+        "overview": 1,
+        "nav": 2,
+        "pe": 2,
+    }
 
 
 # ---------------------------------------------------------------------------

@@ -65,7 +65,14 @@ RULES_CONFIG = {
             "fund_size": {"weight": 10, "thresholds": {"min": 1}},
         }
     },
-    "data": {"kline_days": 120, "pe_cache_days": 7},
+    # 缓存三档故意取非默认值：默认值相同的话，main 是否真的读了配置就测不出来
+    "data": {
+        "kline_days": 120,
+        "pe_cache_days": 7,
+        "quote_cache_minutes": 15,
+        "daily_cache_hours": 3,
+        "slow_cache_days": 2,
+    },
     "output": {"buy_top_n": 5, "avoid_bottom_n": 5},
 }
 
@@ -859,7 +866,7 @@ def test_run_configures_cache_before_reset(monkeypatch, config_dir, tmp_path):
     monkeypatch.setattr(
         data,
         "configure_cache",
-        lambda cache_dir, ttl_hours=24: order.append("configure"),
+        lambda cache_dir, **ttls: order.append("configure"),
     )
     monkeypatch.setattr(data, "reset_quote_source_state", lambda: order.append("reset"))
     _patch_data(monkeypatch, **_happy_overrides())
@@ -874,13 +881,23 @@ def test_run_configures_market_cache(monkeypatch, config_dir, tmp_path):
     monkeypatch.setattr(
         data,
         "configure_cache",
-        lambda cache_dir, ttl_hours=24: calls.append((cache_dir, ttl_hours)),
+        lambda cache_dir, **ttls: calls.append((cache_dir, ttls)),
     )
     _patch_data(monkeypatch, **_happy_overrides())
 
     main.run(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
 
-    assert calls == [(tmp_path, 24)]  # 按 rules.yaml 的 market_cache_hours 启用
+    # rules.yaml 的三档单位各不相同（分钟/小时/天），换算错了这里会差 60 倍
+    assert calls == [
+        (
+            tmp_path,
+            {
+                "live_seconds": 15 * 60,
+                "daily_seconds": 3 * 3600,
+                "slow_seconds": 2 * 86400,
+            },
+        )
+    ]
 
 
 def test_run_resets_quote_source_state(monkeypatch, config_dir, tmp_path):

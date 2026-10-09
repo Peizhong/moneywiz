@@ -172,7 +172,9 @@ def test_output_defaults_when_section_absent(tmp_path):
         "pe_cache_days": 7,
         "financial_cache_days": 30,
         "index_refresh_days": 14,
-        "market_cache_hours": 24,
+        "quote_cache_minutes": 0,
+        "daily_cache_hours": 6,
+        "slow_cache_days": 7,
         "candidate_top_n": 0,
     }
 

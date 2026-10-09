@@ -1,7 +1,8 @@
-"""通用取数缓存（SQLite，默认 24 小时）。
+"""通用取数缓存（SQLite）。
 
-数据层在每次运行开始用 ``configure_cache`` 指定缓存位置与 TTL；命中时直接返回
-上次的规范化结果（DataFrame 或 JSON 可序列化对象），24 小时内不再请求上游。
+数据层在每次运行开始用 ``configure_cache`` 指定缓存位置与各档 TTL；命中时直接返回
+上次的规范化结果（DataFrame 或 JSON 可序列化对象），TTL 内不再请求上游。
+本模块只管「按 key 存取 + 按 TTL 判过期」，分档策略在 ``src/data.py``。
 缓存自身故障（文件损坏、不可写）一律安静降级为"未命中"，绝不影响取数正确性。
 """
 
@@ -19,7 +20,6 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_TTL_SECONDS = 24 * 3600
 CREATE_TABLE = (
     "CREATE TABLE IF NOT EXISTS cache ("
     "key TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at TEXT NOT NULL)"

@@ -1,4 +1,8 @@
-"""src.cache 通用 24 小时缓存（SQLite）的单元测试，不联网。"""
+"""src.cache 通用取数缓存（SQLite，按 TTL 判过期）的单元测试，不联网。
+
+分档策略在 ``src/data.py``（见其 TTL_LIVE/TTL_DAILY/TTL_SLOW），本文件只测
+「按 key 存取 + 按传入 TTL 判过期」这一层。
+"""
 
 import sqlite3
 from datetime import datetime, timedelta
@@ -114,7 +118,7 @@ def test_expired_entry_is_a_miss(tmp_path):
     cache.set("kline", 1.0, now=NOW - timedelta(hours=25))
 
     assert cache.get("kline", ttl_seconds=24 * 3600, now=NOW) is None
-    # 24 小时内的数据命中
+    # TTL 内的数据命中
     cache.set("fresh", 2.0, now=NOW - timedelta(hours=23))
     assert cache.get("fresh", ttl_seconds=24 * 3600, now=NOW) == pytest.approx(2.0)
 

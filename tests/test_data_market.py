@@ -7,6 +7,7 @@ import akshare as ak
 import pandas as pd
 import pytest
 
+from src import data
 from src.data import (
     get_10y_bond_yield,
     get_index_constituents,
@@ -118,3 +119,34 @@ def test_index_constituents_failure_returns_none(monkeypatch):
     monkeypatch.setattr(ak, "index_stock_cons_csindex", boom)
 
     assert get_index_constituents("000015") is None
+
+
+# ---------------------------------------------------------------------------
+# 取数缓存分档（configure_cache）：温度计三项都走日频档
+# ---------------------------------------------------------------------------
+
+
+def test_market_indicators_use_daily_tier(monkeypatch, tmp_path):
+    """股息率/国债默认缓存（日频档）：每个交易日更新一次即可。
+
+    若被误标为实时档（默认不缓存），下面的计数会是 2。
+    """
+    counts = {"yield": 0, "bond": 0}
+
+    def fake_index_value(symbol):
+        counts["yield"] += 1
+        return _index_value_frame()
+
+    def fake_bond(start_date):
+        counts["bond"] += 1
+        return _bond_frame()
+
+    monkeypatch.setattr(ak, "stock_zh_index_value_csindex", fake_index_value)
+    monkeypatch.setattr(ak, "bond_zh_us_rate", fake_bond)
+    data.configure_cache(tmp_path)
+
+    for _ in range(2):
+        get_index_dividend_yield("000922")
+        get_10y_bond_yield()
+
+    assert counts == {"yield": 1, "bond": 1}

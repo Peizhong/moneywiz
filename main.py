@@ -443,15 +443,19 @@ def run_scan(
     """
     started = time.monotonic()
     cfg = config.load_config(config_dir)
+    data_cfg = cfg.rules["data"]
     data.configure_cache(
-        cache_dir, ttl_hours=cfg.rules["data"]["market_cache_hours"]
+        cache_dir,
+        live_seconds=data_cfg["quote_cache_minutes"] * 60,
+        daily_seconds=data_cfg["daily_cache_hours"] * 3600,
+        slow_seconds=data_cfg["slow_cache_days"] * 86400,
     )
     data.reset_quote_source_state()  # 读取（可能持久化的）东财熔断判定
     as_of = as_of or date.today()
-    kline_days = cfg.rules["data"]["kline_days"]
-    pe_cache_days = cfg.rules["data"]["pe_cache_days"]
+    kline_days = data_cfg["kline_days"]
+    pe_cache_days = data_cfg["pe_cache_days"]
 
-    refresh_days = cfg.rules["data"]["index_refresh_days"]
+    refresh_days = data_cfg["index_refresh_days"]
     refresh = constituents.refresh_indices(
         config_dir / config.FILENAMES["constituents"],
         cfg.indices,
@@ -468,9 +472,9 @@ def run_scan(
         "get_stock_spot",
     )
     selection = _select_constituents(
-        refresh["constituents"], spot, cfg.rules["data"]["candidate_top_n"]
+        refresh["constituents"], spot, data_cfg["candidate_top_n"]
     )
-    _log_candidate_selection(selection, cfg.rules["data"]["candidate_top_n"])
+    _log_candidate_selection(selection, data_cfg["candidate_top_n"])
     scan_stocks = _scan_stocks(cfg.stocks, selection["kept"])
     fund_quotes = _fetch_fund_quotes(cfg.funds)
     market = _market_context()
@@ -484,7 +488,7 @@ def run_scan(
             as_of,
             kline_days,
             pe_cache_days,
-            cfg.rules["data"]["financial_cache_days"],
+            data_cfg["financial_cache_days"],
             cfg.rules["stocks"],
         )
         result["new_constituent"] = stock.code in new_codes

@@ -389,7 +389,7 @@ def test_spot_all_codes_unknown_returns_empty_frame_without_request(monkeypatch)
 def test_spot_ignores_legacy_cache_entry_without_market_cap(monkeypatch, tmp_path):
     """旧 schema（无 market_cap 列）的行情缓存不得复用——否则候选池会一只都排不出市值。"""
     monkeypatch.setattr(ak, "stock_zh_a_spot_em", lambda: _spot_frame())
-    data.configure_cache(tmp_path, ttl_hours=24)
+    data.configure_cache(tmp_path, live_seconds=24 * 3600)
     legacy = pd.DataFrame(
         {
             "code": ["600036"],
@@ -447,8 +447,94 @@ def test_kline_both_sources_fail_returns_none(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# 通用 24 小时取数缓存（configure_cache）
+# 取数缓存分档（configure_cache）：live 每次运行都取 / daily 日频 / slow 慢变
 # ---------------------------------------------------------------------------
+
+
+def test_quote_tier_is_not_cached_by_default(monkeypatch, tmp_path):
+    """实时档（个股行情）默认不缓存：价格是股息率的分母，每次运行都要最新。"""
+    calls = []
+
+    def fake_spot():
+        calls.append(1)
+        return _spot_frame()
+
+    monkeypatch.setattr(ak, "stock_zh_a_spot_em", fake_spot)
+    data.configure_cache(tmp_path)
+
+    get_stock_spot(["600036"])
+    get_stock_spot(["600036"])
+
+    assert len(calls) == 2
+    # 不缓存 = 写都不写：库里不留永远读不到的垃圾行
+    assert (
+        Cache(tmp_path / "market_cache.db").get("spot:v2:600036", ttl_seconds=10**9)
+        is None
+    )
+
+
+def test_daily_tier_caches_kline_by_default(monkeypatch, tmp_path):
+    """日频档（K 线）默认缓存：每个交易日只变一次。"""
+    calls = []
+
+    def fake_hist(**kwargs):
+        calls.append(1)
+        return _kline_frame([("2026-09-30", 40.0)])
+
+    monkeypatch.setattr(ak, "stock_zh_a_hist", fake_hist)
+    data.configure_cache(tmp_path)
+
+    get_kline("600036", as_of=AS_OF)
+    get_kline("600036", as_of=AS_OF)
+
+    assert len(calls) == 1
+
+
+def test_slow_tier_caches_dividend_by_default(monkeypatch, tmp_path):
+    """慢变档（分红明细）默认缓存：一年实施 1~2 次。"""
+    calls = []
+
+    def fake_detail(**kwargs):
+        calls.append(1)
+        return _dividend_frame()
+
+    monkeypatch.setattr(ak, "stock_history_dividend_detail", fake_detail)
+    data.configure_cache(tmp_path)
+
+    get_dividend_history("600036")
+    get_dividend_history("600036")
+
+    assert len(calls) == 1
+
+
+def test_tier_ttls_are_independent(monkeypatch, tmp_path):
+    """三档各接各的 TTL：daily 设长、live/slow 设 0 → 只有 K 线命中缓存。"""
+    counts = {"spot": 0, "kline": 0, "dividend": 0}
+
+    def fake_spot():
+        counts["spot"] += 1
+        return _spot_frame()
+
+    def fake_hist(**kwargs):
+        counts["kline"] += 1
+        return _kline_frame([("2026-09-30", 40.0)])
+
+    def fake_detail(**kwargs):
+        counts["dividend"] += 1
+        return _dividend_frame()
+
+    monkeypatch.setattr(ak, "stock_zh_a_spot_em", fake_spot)
+    monkeypatch.setattr(ak, "stock_zh_a_hist", fake_hist)
+    monkeypatch.setattr(ak, "stock_history_dividend_detail", fake_detail)
+    data.configure_cache(tmp_path, live_seconds=0, daily_seconds=10**9, slow_seconds=0)
+
+    for _ in range(2):
+        get_stock_spot(["600036"])
+        get_kline("600036", as_of=AS_OF)
+        get_dividend_history("600036")
+
+    # 行情与分红不共用日频档——档位接错（如 spot 用 daily）会让这里变成 1
+    assert counts == {"spot": 2, "kline": 1, "dividend": 2}
 
 
 def test_kline_cache_hit_skips_upstream(monkeypatch, tmp_path):
@@ -459,7 +545,7 @@ def test_kline_cache_hit_skips_upstream(monkeypatch, tmp_path):
         return _kline_frame([("2026-09-30", 40.0)])
 
     monkeypatch.setattr(ak, "stock_zh_a_hist", fake_hist)
-    data.configure_cache(tmp_path, ttl_hours=24)
+    data.configure_cache(tmp_path, daily_seconds=24 * 3600)
 
     first = get_kline("600036", as_of=AS_OF)
     second = get_kline("600036", as_of=AS_OF)
@@ -492,7 +578,7 @@ def test_failure_results_are_not_cached(monkeypatch, tmp_path):
 
     monkeypatch.setattr(ak, "stock_zh_a_hist", failing)
     monkeypatch.setattr("src.data.requests.get", _raise_connection_error)
-    data.configure_cache(tmp_path, ttl_hours=24)
+    data.configure_cache(tmp_path, daily_seconds=24 * 3600)
 
     assert get_kline("600036", as_of=AS_OF) is None
     assert get_kline("600036", as_of=AS_OF) is None
@@ -515,7 +601,7 @@ def test_expired_ttl_refetches(monkeypatch, tmp_path):
         return _kline_frame([("2026-09-30", 40.0)])
 
     monkeypatch.setattr(ak, "stock_zh_a_hist", fake_hist)
-    data.configure_cache(tmp_path, ttl_hours=0)  # 立即过期
+    data.configure_cache(tmp_path, daily_seconds=0)  # 立即过期
 
     get_kline("600036", as_of=AS_OF)
     get_kline("600036", as_of=AS_OF)
@@ -536,7 +622,7 @@ def test_get_kline_raw_uses_tencent_without_adjust(monkeypatch):
 
 def test_get_kline_raw_is_cached(monkeypatch, tmp_path):
     calls = _patch_http(monkeypatch, {"fqkline": RAW_KLINE_JSON.encode("utf-8")})
-    data.configure_cache(tmp_path, ttl_hours=24)
+    data.configure_cache(tmp_path, daily_seconds=24 * 3600)
 
     first = get_kline_raw("600036", days=790)
     second = get_kline_raw("600036", days=790)
@@ -703,7 +789,7 @@ def test_breaker_notice_reappears_in_next_run(monkeypatch, tmp_path, caplog):
 
     monkeypatch.setattr(ak, "stock_zh_a_hist", failing_hist)
     _stub_tencent_kline(monkeypatch)
-    data.configure_cache(tmp_path, ttl_hours=24)
+    data.configure_cache(tmp_path, daily_seconds=24 * 3600)
 
     get_kline("600036", as_of=AS_OF)  # 触发熔断并持久化
     reset_quote_source_state()  # 模拟下一次运行：沿用持久化判定
@@ -1226,7 +1312,7 @@ def test_breaker_persists_across_runs_when_cache_enabled(monkeypatch, tmp_path):
 
     monkeypatch.setattr(ak, "stock_zh_a_hist", failing_hist)
     _patch_http(monkeypatch, {"fqkline": KLINE_JSON.encode("utf-8")})
-    data.configure_cache(tmp_path, ttl_hours=24)
+    data.configure_cache(tmp_path, daily_seconds=24 * 3600)
 
     get_kline("600036", as_of=AS_OF)  # 第一次运行：东财失败 → 腾讯成功 → 熔断并持久化
     assert len(attempts) == 2
@@ -1246,7 +1332,7 @@ def test_stale_persisted_breaker_is_ignored(monkeypatch, tmp_path):
 
     monkeypatch.setattr(ak, "stock_zh_a_hist", failing_hist)
     _patch_http(monkeypatch, {"fqkline": KLINE_JSON.encode("utf-8")})
-    data.configure_cache(tmp_path, ttl_hours=24)
+    data.configure_cache(tmp_path, daily_seconds=24 * 3600)
     # 直接写入一条 31 分钟前的过期判定
     Cache(tmp_path / "market_cache.db").set(
         "state:eastmoney_quotes_down",

@@ -41,7 +41,7 @@ import akshare as ak
 import pandas as pd
 import requests
 
-from src.cache import DEFAULT_TTL_SECONDS, Cache
+from src.cache import Cache
 
 logger = logging.getLogger(__name__)
 
@@ -143,28 +143,59 @@ SUPPORTED_INDEX_PE = {
 }
 
 
-# 通用取数缓存（默认 24 小时）：main.run 开始时经 configure_cache 启用，
+# 取数缓存分档：同一档共用一个 TTL，由 main.run 经 configure_cache 从 rules.yaml 设定。
+#   TTL_LIVE  实时类——价格随分钟变（股息率/折溢价的分母），默认每次运行都取最新
+#   TTL_DAILY 日频类——每个交易日更新一次即可，须跨交易日失效
+#   TTL_SLOW  慢变类——分红明细（一年实施 1~2 次）、基金概况（规模季度更新）
+TTL_LIVE = "live"
+TTL_DAILY = "daily"
+TTL_SLOW = "slow"
+
+DEFAULT_TTLS = {TTL_LIVE: 0.0, TTL_DAILY: 6 * 3600.0, TTL_SLOW: 7 * 86400.0}
+
+# 通用取数缓存：main.run 开始时经 configure_cache 启用，
 # 测试与不传 cache_dir 的场景保持关闭（None）。
 _market_cache: "Cache | None" = None
-_market_cache_ttl_seconds = DEFAULT_TTL_SECONDS
+_market_cache_ttls: dict[str, float] = dict(DEFAULT_TTLS)
 
 
-def configure_cache(cache_dir, ttl_hours: float = 24) -> None:
-    """启用取数缓存（cache_dir/market_cache.db）；cache_dir 传 None 时关闭。"""
-    global _market_cache, _market_cache_ttl_seconds
+def configure_cache(
+    cache_dir,
+    *,
+    live_seconds: float = DEFAULT_TTLS[TTL_LIVE],
+    daily_seconds: float = DEFAULT_TTLS[TTL_DAILY],
+    slow_seconds: float = DEFAULT_TTLS[TTL_SLOW],
+) -> None:
+    """启用取数缓存（cache_dir/market_cache.db）并按档设定 TTL（秒）。
+
+    某档 ≤ 0 表示该档不缓存（每次运行都重新取）。``cache_dir`` 传 None 时关闭缓存
+    并复位各档 TTL，避免上一轮配置残留到下一个使用方（测试尤甚）。
+    """
+    global _market_cache, _market_cache_ttls
     if cache_dir is None:
         _market_cache = None
+        _market_cache_ttls = dict(DEFAULT_TTLS)
         return
-    _market_cache_ttl_seconds = int(ttl_hours * 3600)
+    _market_cache_ttls = {
+        TTL_LIVE: live_seconds,
+        TTL_DAILY: daily_seconds,
+        TTL_SLOW: slow_seconds,
+    }
     _market_cache = Cache(Path(cache_dir) / "market_cache.db")
 
 
-def _cached(key: str, fetch):
-    """命中缓存直接返回；否则调用 fetch，成功（非 None）时写入缓存。"""
+def _cached(key: str, fetch, tier: str):
+    """命中缓存直接返回；否则调用 fetch，成功（非 None）时写入缓存。
+
+    ``tier`` 必填（``TTL_LIVE``/``TTL_DAILY``/``TTL_SLOW``）：缓存多久是取数语义的
+    一部分，不接受默认值——新增取数函数必须自己声明它属于哪一档。TTL ≤ 0 的档
+    既不读也不写（不留下永远读不到的垃圾行）。
+    """
     cache = _market_cache
-    if cache is None:
+    ttl = _market_cache_ttls[tier]
+    if cache is None or ttl <= 0:
         return fetch()
-    hit = cache.get(key, _market_cache_ttl_seconds)
+    hit = cache.get(key, ttl)
     if hit is not None:
         return hit
     value = fetch()
@@ -225,13 +256,15 @@ def get_stock_spot(codes) -> pd.DataFrame | None:
     """A 股实时行情（东财主源 → 腾讯回退），归一为
     ``code, name, price, pe, pb, market_cap``（market_cap 单位：亿元）。
 
-    结果按 ``market_cache_hours``（默认 24 小时）缓存，键为代码集合。
+    实时档（``TTL_LIVE``，默认不缓存——价格是股息率的分母，每次运行都要最新）。
     键带 ``v2`` 版本前缀：旧缓存是 5 列帧（无 market_cap），直接复用会让候选池
     一只都排不出市值，故改版本号令其自然过期。
     """
     codes = list(codes)
     return _cached(
-        f"spot:v2:{','.join(sorted(codes))}", lambda: _fetch_stock_spot(codes)
+        f"spot:v2:{','.join(sorted(codes))}",
+        lambda: _fetch_stock_spot(codes),
+        TTL_LIVE,
     )
 
 
@@ -326,10 +359,10 @@ def get_kline(
 ) -> pd.DataFrame | None:
     """单只日 K 线（前复权，东财主源 → 腾讯回退），归一为 ``date, close``。
 
-    结果按 ``market_cache_hours``（默认 24 小时）缓存（显式 ``as_of`` 单独成键）。
+    日频档（``TTL_DAILY``；显式 ``as_of`` 单独成键）。
     """
     key = f"kline:{code}:{days}:{as_of.isoformat() if as_of else 'live'}"
-    return _cached(key, lambda: _fetch_kline(code, days, as_of))
+    return _cached(key, lambda: _fetch_kline(code, days, as_of), TTL_DAILY)
 
 
 def get_kline_raw(code: str, days: int = 790) -> pd.DataFrame | None:
@@ -337,9 +370,11 @@ def get_kline_raw(code: str, days: int = 790) -> pd.DataFrame | None:
 
     用于股息率历史分位：历史股息率 = 当期 TTM 分红 ÷ 当日**不复权**价格——
     前复权价已扣除后来的分红，会把历史股息率系统性算低。
-    结果按 ``market_cache_hours`` 缓存；失败 → None。
+    日频档（``TTL_DAILY``）；失败 → None。
     """
-    return _cached(f"kline_raw:{code}:{days}", lambda: _fetch_kline_raw(code, days))
+    return _cached(
+        f"kline_raw:{code}:{days}", lambda: _fetch_kline_raw(code, days), TTL_DAILY
+    )
 
 
 def _fetch_kline_raw(code: str, days: int) -> pd.DataFrame | None:
@@ -509,9 +544,12 @@ def _sina_kline(code: str, days: int, adjust: str) -> pd.DataFrame | None:
 def get_dividend_history(code: str) -> pd.DataFrame | None:
     """单只个股实施完毕的分红明细，归一为 ``date, dividend_per_share``。
 
-    结果按 ``market_cache_hours``（默认 24 小时）缓存。
+    慢变档（``TTL_SLOW``）：分红明细一年实施 1~2 次。TTM 口径下除息日前后分红合计
+    近似不变（新分红进入窗口的同时去年同期滚出），缓存期内不会把股息率系统性算偏。
     """
-    return _cached(f"dividend:{code}", lambda: _fetch_dividend_history(code))
+    return _cached(
+        f"dividend:{code}", lambda: _fetch_dividend_history(code), TTL_SLOW
+    )
 
 
 def _fetch_dividend_history(code: str) -> pd.DataFrame | None:
@@ -797,12 +835,14 @@ _FUND_HIST_FUNCTIONS = {"etf": "fund_etf_hist_em", "lof": "fund_lof_hist_em"}
 def get_fund_quotes(fund_type: str, codes) -> pd.DataFrame | None:
     """ETF/LOF 实时行情（东财主源 → 腾讯回退），归一为 ``code, name, price, iopv``。
 
-    只保留 ``codes``；腾讯回退路径无 IOPV（该列为 NaN），结果按 24 小时缓存。
+    只保留 ``codes``；腾讯回退路径无 IOPV（该列为 NaN）。
+    实时档（``TTL_LIVE``，默认不缓存——折溢价的分母每次运行都要最新）。
     """
     codes = list(codes)
     return _cached(
         f"fund_quotes:{fund_type}:{','.join(sorted(codes))}",
         lambda: _fetch_fund_quotes(fund_type, codes),
+        TTL_LIVE,
     )
 
 
@@ -885,11 +925,12 @@ def get_fund_nav_history(
 ) -> pd.DataFrame | None:
     """单只基金日净值，归一为 ``date, close``。
 
-    结果按 ``market_cache_hours``（默认 24 小时）缓存。
+    日频档（``TTL_DAILY``）。
     """
     return _cached(
         f"fund_nav:{code}:{fund_type}:{days}",
         lambda: _fetch_fund_nav_history(code, fund_type, days),
+        TTL_DAILY,
     )
 
 
@@ -959,8 +1000,10 @@ def _fetch_fund_nav_history(
 
 
 def get_fund_latest_nav(code: str) -> float | None:
-    """最新单位净值（``单位净值走势`` 末行）；结果按 24 小时缓存。"""
-    return _cached(f"fund_latest_nav:{code}", lambda: _fetch_fund_latest_nav(code))
+    """最新单位净值（``单位净值走势`` 末行）；实时档（``TTL_LIVE``，默认不缓存）。"""
+    return _cached(
+        f"fund_latest_nav:{code}", lambda: _fetch_fund_latest_nav(code), TTL_LIVE
+    )
 
 
 def _fetch_fund_latest_nav(code: str) -> float | None:
@@ -973,9 +1016,11 @@ def _fetch_fund_latest_nav(code: str) -> float | None:
 
 
 def get_fund_dividend_history(code: str) -> pd.DataFrame | None:
-    """基金分红除息日序列，归一为 ``date`` 单列；结果按 24 小时缓存。"""
+    """基金分红除息日序列，归一为 ``date`` 单列；慢变档（``TTL_SLOW``）。"""
     return _cached(
-        f"fund_dividends:{code}", lambda: _fetch_fund_dividend_history(code)
+        f"fund_dividends:{code}",
+        lambda: _fetch_fund_dividend_history(code),
+        TTL_SLOW,
     )
 
 
@@ -996,8 +1041,10 @@ def _fetch_fund_dividend_history(code: str) -> pd.DataFrame | None:
 
 
 def get_fund_overview(code: str) -> dict | None:
-    """基金概况原始串（``scale``/``tracker``）；结果按 24 小时缓存。"""
-    return _cached(f"fund_overview:{code}", lambda: _fetch_fund_overview(code))
+    """基金概况原始串（``scale``/``tracker``）；慢变档（``TTL_SLOW``，规模季度更新）。"""
+    return _cached(
+        f"fund_overview:{code}", lambda: _fetch_fund_overview(code), TTL_SLOW
+    )
 
 
 def _fetch_fund_overview(code: str) -> dict | None:
@@ -1070,9 +1117,11 @@ def _strip_tracker_suffix(tracker: str | None) -> str | None:
 
 
 def get_index_pe_history(index_symbol: str) -> pd.DataFrame | None:
-    """乐咕乐股指数 PE 历史，归一为 ``date, pe``（滚动市盈率）；按 24 小时缓存。"""
+    """乐咕乐股指数 PE 历史，归一为 ``date, pe``（滚动市盈率）；日频档（``TTL_DAILY``）。"""
     return _cached(
-        f"index_pe:{index_symbol}", lambda: _fetch_index_pe_history(index_symbol)
+        f"index_pe:{index_symbol}",
+        lambda: _fetch_index_pe_history(index_symbol),
+        TTL_DAILY,
     )
 
 
@@ -1322,10 +1371,11 @@ def get_financial_health(
 
 
 def get_index_dividend_yield(index_code: str = "000922") -> float | None:
-    """中证指数官网最新股息率（%，取 ``股息率1``）；结果按 24 小时缓存。"""
+    """中证指数官网最新股息率（%，取 ``股息率1``）；日频档（``TTL_DAILY``）。"""
     return _cached(
         f"index_div_yield:{index_code}",
         lambda: _fetch_index_dividend_yield(index_code),
+        TTL_DAILY,
     )
 
 
@@ -1349,8 +1399,10 @@ def _fetch_index_dividend_yield(index_code: str = "000922") -> float | None:
 
 
 def get_10y_bond_yield(days: int = 90) -> float | None:
-    """中国 10 年期国债收益率最新值（%）；结果按 24 小时缓存。"""
-    return _cached(f"bond_10y:{days}", lambda: _fetch_10y_bond_yield(days))
+    """中国 10 年期国债收益率最新值（%）；日频档（``TTL_DAILY``）。"""
+    return _cached(
+        f"bond_10y:{days}", lambda: _fetch_10y_bond_yield(days), TTL_DAILY
+    )
 
 
 def _fetch_10y_bond_yield(days: int = 90) -> float | None:
