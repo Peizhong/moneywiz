@@ -1106,3 +1106,17 @@ def test_run_etf_discount_falls_back_to_latest_nav(monkeypatch, config_dir, tmp_
     report = main.run(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
 
     assert "折溢价 +2.00%" in _row_for(report, "红利ETF")
+
+
+def test_run_scan_exposes_snapshot_fields(monkeypatch, config_dir, tmp_path):
+    """快照入口依赖 run_scan 返回的四个新键：market/fund_results/elapsed/as_of。"""
+    _patch_data(monkeypatch, **_happy_overrides())
+
+    scan = main.run_scan(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
+
+    assert scan["as_of"] == AS_OF
+    assert isinstance(scan["elapsed"], float) and scan["elapsed"] >= 0
+    assert scan["market"]["dividend_yield"] == pytest.approx(4.2)
+    assert scan["market"]["bond_10y"] == pytest.approx(1.8)
+    assert [r["code"] for r in scan["stock_results"]] == [STOCK_A, STOCK_B]
+    assert [r["code"] for r in scan["fund_results"]] == [FUND_CODE]

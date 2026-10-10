@@ -437,9 +437,9 @@ def run_scan(
     cache_dir: Path = Path("cache"),
     as_of: date | None = None,
 ) -> dict:
-    """跑一遍筛选，返回 ``{"report", "stock_results", "rules", "output"}``。
+    """跑一遍筛选，返回 ``{"report", "stock_results", "fund_results", "market", "elapsed", "as_of", "rules", "output"}``。
 
-    比 :func:`run` 多带回交互式详情所需的原始结果（report 之外的部分不被消费）。
+    比 :func:`run` 多带回交互式详情与快照所需的原始结果（report 之外的部分不被 report 消费）。
     """
     started = time.monotonic()
     cfg = config.load_config(config_dir)
@@ -503,17 +503,22 @@ def run_scan(
         )
         for fund in cfg.funds
     ]
+    elapsed = time.monotonic() - started
     return {
         "report": reporter.render_report(
             stock_results,
             fund_results,
             cfg.output,
-            time.monotonic() - started,
+            elapsed,
             market=market,
             risk_hints=cfg.rules["stocks"].get("risk_hints"),
             position_window=kline_days,
         ),
         "stock_results": stock_results,
+        "fund_results": fund_results,
+        "market": market,
+        "elapsed": elapsed,
+        "as_of": as_of,
         "rules": cfg.rules,
         "output": cfg.output,
     }
