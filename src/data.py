@@ -12,17 +12,6 @@
 - ``get_industry_pe_pb(code, cache_dir, cache_days=7)`` →
   ``{"industry": str, "pe": float | None, "pb": float | None}``
   （行业成分股 PE/PB 中位数，结果缓存在 ``cache_dir/pe_cache.json``）。
-- ``get_fund_quotes(fund_type)`` → 列 ``code, name, price, iopv``
-  （etf/lof 行情表；normal 无行情表 → None；ETF 的 IOPV 为 "-" 时是 NaN）。
-- ``get_fund_nav_history(code, fund_type, days=120)`` → 列 ``date, close``
-  （datetime64 升序，float；已剔除净值 NaN 的行；最多 days 行）。
-- ``get_fund_latest_nav(code)`` → 最新单位净值 float | None。
-- ``get_fund_dividend_history(code)`` → 列 ``date``
-  （除息日 datetime64 升序；所有基金类型同源）。
-- ``get_fund_overview(code)`` → ``{"scale": str | None, "tracker": str | None}``
-  （``净资产规模``/``跟踪标的`` 原始串，未做可用性判定）。
-- ``resolve_index_symbol(configured, tracker)`` → 支持 PE 分位的指数名 | None
-  （configured 优先；否则由 tracker 去掉 ``指数``/``全收益`` 后缀后校验）。
 - ``get_index_pe_history(index_symbol)`` → 列 ``date, pe``
   （datetime64 升序，滚动市盈率 float；已剔除 NaN）。
 
@@ -66,16 +55,13 @@ CACHE_SCHEMA = 3
 # eps_history / cash_yoy_history 的条数上限（判定窗口 4 的一倍余量）。
 HISTORY_LIMIT = 8
 
-FUND_QUOTE_COLUMNS = ("code", "name", "price", "iopv")
-FUND_NAV_COLUMNS = ("date", "close")
-FUND_DIVIDEND_COLUMNS = ("date",)
 INDEX_PE_COLUMNS = ("date", "pe")
 
 # 腾讯回退源（东财 push2 行情对海外 IP 拒绝服务时的备用行情/K线）
 TENCENT_QUOTE_URL = "https://qt.gtimg.cn/q="
 TENCENT_KLINE_URL = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
 
-# 东财行情熔断标记：行情集群（push2 系列：个股行情/K线/行业/基金行情）任一调用
+# 东财行情熔断标记：行情集群（push2 系列：个股行情/K线/行业）任一调用
 # 失败（重试后仍失败）→ 判定不可用：本次运行内不再请求东财行情、直接走回退源或
 # 按数据不足处理。启用取数缓存时该判定持久化 BREAKER_SECONDS（30 分钟），后续
 # 运行直接沿用——东财恢复前不重复付出每只标的的重试等待。
@@ -134,27 +120,11 @@ def _mark_eastmoney_quotes_down() -> None:
         if _market_cache is not None:
             _market_cache.set(_BREAKER_CACHE_KEY, {"at": datetime.now().isoformat()})
 
-# stock_index_pe_lg 接受的指数名（"中证红利" 等不在其列，见 resolve_index_symbol）
-SUPPORTED_INDEX_PE = {
-    "上证50",
-    "沪深300",
-    "上证380",
-    "创业板50",
-    "中证500",
-    "上证180",
-    "深证红利",
-    "深证100",
-    "中证1000",
-    "上证红利",
-    "中证100",
-    "中证800",
-}
-
 
 # 取数缓存分档：同一档共用一个 TTL，由 main.run 经 configure_cache 从 rules.yaml 设定。
-#   TTL_LIVE  实时类——价格随分钟变（股息率/折溢价的分母），默认每次运行都取最新
+#   TTL_LIVE  实时类——个股行情（股息率的分母），默认每次运行都取最新
 #   TTL_DAILY 日频类——每个交易日更新一次即可，须跨交易日失效
-#   TTL_SLOW  慢变类——分红明细（一年实施 1~2 次）、基金概况（规模季度更新）
+#   TTL_SLOW  慢变类——分红明细（一年实施 1~2 次）
 TTL_LIVE = "live"
 TTL_DAILY = "daily"
 TTL_SLOW = "slow"
@@ -233,10 +203,7 @@ def _call(fn, *args, label=None, **kwargs):
 
 
 def _tencent_symbol(code: str) -> str | None:
-    """代码 → 腾讯行情符号；5/6→sh、0/1/3→sz、4/8/9→bj，无法识别 → None。
-
-    ``5`` 覆盖沪市基金/ETF（如 510880），``1`` 覆盖深市基金/LOF（如 161725）。
-    """
+    """代码 → 腾讯行情符号；5/6→sh、0/1/3→sz、4/8/9→bj，无法识别 → None。"""
     if code.startswith(("5", "6")):
         return f"sh{code}"
     if code.startswith(("0", "1", "3")):
@@ -844,296 +811,8 @@ def _cached_medians(cache: dict, industry: str, cache_days: int) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
-# 基金：行情 / 净值 / 分红 / 概况
-# ---------------------------------------------------------------------------
-
-# 值存函数名而非函数对象，保证 monkeypatch akshare 后 `getattr(ak, ...)` 生效
-_FUND_SPOT_FUNCTIONS = {"etf": "fund_etf_spot_em", "lof": "fund_lof_spot_em"}
-_FUND_HIST_FUNCTIONS = {"etf": "fund_etf_hist_em", "lof": "fund_lof_hist_em"}
-
-
-def get_fund_quotes(fund_type: str, codes) -> pd.DataFrame | None:
-    """ETF/LOF 实时行情（东财主源 → 腾讯回退），归一为 ``code, name, price, iopv``。
-
-    只保留 ``codes``；腾讯回退路径无 IOPV（该列为 NaN）。
-    实时档（``TTL_LIVE``，默认不缓存——折溢价的分母每次运行都要最新）。
-    """
-    codes = list(codes)
-    return _cached(
-        f"fund_quotes:{fund_type}:{','.join(sorted(codes))}",
-        lambda: _fetch_fund_quotes(fund_type, codes),
-        TTL_LIVE,
-    )
-
-
-def _fetch_fund_quotes(fund_type: str, codes: list[str]) -> pd.DataFrame | None:
-    """ETF/LOF 实时行情（东财主源 → 腾讯回退），归一 ``code, name, price, iopv``。
-
-    ``etf`` 源 ``fund_etf_spot_em``、``lof`` 源 ``fund_lof_spot_em``（上游无
-    IOPV 列 → 该列全为 NaN）；``normal`` 开放式基金无行情表 → None。
-    东财不可用时回退腾讯（价格，IOPV 缺失）。
-    """
-    ak_name = _FUND_SPOT_FUNCTIONS.get(fund_type)
-    if ak_name is None:
-        return None
-    if not _eastmoney_quotes_available():
-        _log_fallback_once(
-            "fund_breaker_info",
-            logging.INFO,
-            "东财行情已熔断，get_fund_quotes(%s) 回退腾讯行情",
-            fund_type,
-        )
-        return _tencent_fund_quotes(codes)
-    raw = _call(getattr(ak, ak_name))
-    if raw is None:
-        _mark_eastmoney_quotes_down()  # 行情集群失败即熔断（30 分钟内不重复重试）
-        _log_fallback_once(
-            "fund_fail_warning",
-            logging.WARNING,
-            "get_fund_quotes(%s) 东财行情不可用，回退腾讯行情",
-            fund_type,
-        )
-        return _tencent_fund_quotes(codes)
-    if raw.empty:
-        return pd.DataFrame(columns=list(FUND_QUOTE_COLUMNS))
-
-    frame = pd.DataFrame(
-        {
-            "code": raw["代码"].astype(str),
-            "name": raw["名称"].astype(str),
-            "price": pd.to_numeric(raw["最新价"], errors="coerce"),
-            "iopv": (
-                pd.to_numeric(raw["IOPV实时估值"], errors="coerce")
-                if "IOPV实时估值" in raw.columns
-                else float("nan")
-            ),
-        }
-    ).reset_index(drop=True)
-    return frame[frame["code"].isin(codes)].reset_index(drop=True)
-
-
-def _tencent_fund_quotes(codes: list[str]) -> pd.DataFrame | None:
-    """腾讯行情回退：ETF/LOF 价格（无 IOPV → 该列为 NaN）；失败 → None。"""
-    wanted = set(codes)
-    symbols = [symbol for c in codes if (symbol := _tencent_symbol(c)) is not None]
-    if not symbols:
-        return pd.DataFrame(columns=list(FUND_QUOTE_COLUMNS))
-    text = _call(
-        _http_text,
-        TENCENT_QUOTE_URL + ",".join(symbols),
-        label="tencent qt.gtimg.cn",
-    )
-    if text is None:
-        return None
-    rows = [
-        {
-            "code": code,
-            "name": parts[1],
-            "price": _num_or_none(parts[3]),
-            "iopv": None,
-        }
-        for code, parts in _tencent_quote_parts(text).items()
-        if code in wanted
-    ]
-    if not rows:
-        return pd.DataFrame(columns=list(FUND_QUOTE_COLUMNS))
-    return pd.DataFrame(rows, columns=list(FUND_QUOTE_COLUMNS))
-
-
-def get_fund_nav_history(
-    code: str, fund_type: str, days: int = 120
-) -> pd.DataFrame | None:
-    """单只基金日净值，归一为 ``date, close``。
-
-    日频档（``TTL_DAILY``）。
-    """
-    return _cached(
-        f"fund_nav:{code}:{fund_type}:{days}",
-        lambda: _fetch_fund_nav_history(code, fund_type, days),
-        TTL_DAILY,
-    )
-
-
-def _fetch_fund_nav_history(
-    code: str, fund_type: str, days: int = 120
-) -> pd.DataFrame | None:
-    """单只基金日净值，归一为 ``date, close``；失败 → None。
-
-    ``etf``/``lof`` 走 ``fund_etf_hist_em``/``fund_lof_hist_em``（``日期/收盘``，
-    请求区间与 ``get_kline`` 同为今天前 2×days 自然日）；``normal`` 走
-    ``fund_open_fund_info_em`` 的单位净值走势（``净值日期/单位净值``）。
-    取末尾 days 行并按日期升序，剔除净值为 NaN 的行。
-    """
-    if fund_type == "normal":
-        raw = _call(ak.fund_open_fund_info_em, symbol=code, indicator="单位净值走势")
-        date_column, close_column = "净值日期", "单位净值"
-    else:
-        ak_name = _FUND_HIST_FUNCTIONS.get(fund_type)
-        if ak_name is None:
-            return None
-        as_of = date.today()
-        if _eastmoney_quotes_available():
-            raw = _call(
-                getattr(ak, ak_name),
-                symbol=code,
-                period="daily",
-                start_date=(as_of - timedelta(days=2 * days)).strftime("%Y%m%d"),
-                end_date=as_of.strftime("%Y%m%d"),
-                adjust="",
-            )
-            if raw is None:
-                _mark_eastmoney_quotes_down()  # 行情集群失败即熔断
-        else:
-            logger.info(
-                "东财行情已熔断，get_fund_nav_history(%s) 直接使用单位净值走势", code
-            )
-            raw = None
-        date_column, close_column = "日期", "收盘"
-        if raw is None:
-            # 东财历史行情不可用（海外常见）→ 回退单位净值走势（fund.eastmoney.com 可达）
-            logger.warning(
-                "get_fund_nav_history(%s, %s) 东财行情不可用，回退单位净值走势",
-                code,
-                fund_type,
-            )
-            raw = _call(
-                ak.fund_open_fund_info_em, symbol=code, indicator="单位净值走势"
-            )
-            date_column, close_column = "净值日期", "单位净值"
-    if raw is None:
-        return None
-    if raw.empty:
-        return pd.DataFrame(columns=list(FUND_NAV_COLUMNS))
-
-    frame = pd.DataFrame(
-        {
-            "date": pd.to_datetime(raw[date_column]),
-            "close": pd.to_numeric(raw[close_column], errors="coerce"),
-        }
-    )
-    return (
-        frame.sort_values("date")
-        .tail(days)
-        .dropna(subset=["close"])  # indicators 不应看到 NaN 净值
-        .reset_index(drop=True)
-    )
-
-
-def get_fund_latest_nav(code: str) -> float | None:
-    """最新单位净值（``单位净值走势`` 末行）；实时档（``TTL_LIVE``，默认不缓存）。"""
-    return _cached(
-        f"fund_latest_nav:{code}", lambda: _fetch_fund_latest_nav(code), TTL_LIVE
-    )
-
-
-def _fetch_fund_latest_nav(code: str) -> float | None:
-    """最新单位净值（``单位净值走势`` 末行）；失败或无有效值 → None。"""
-    raw = _call(ak.fund_open_fund_info_em, symbol=code, indicator="单位净值走势")
-    if raw is None or raw.empty:
-        return None
-    value = pd.to_numeric(raw["单位净值"], errors="coerce").iloc[-1]
-    return None if pd.isna(value) else float(value)
-
-
-def get_fund_dividend_history(code: str) -> pd.DataFrame | None:
-    """基金分红除息日序列，归一为 ``date`` 单列；慢变档（``TTL_SLOW``）。"""
-    return _cached(
-        f"fund_dividends:{code}",
-        lambda: _fetch_fund_dividend_history(code),
-        TTL_SLOW,
-    )
-
-
-def _fetch_fund_dividend_history(code: str) -> pd.DataFrame | None:
-    """单只基金分红明细，归一为 ``date``（除息日，升序）；失败 → None。
-
-    ETF/LOF/开放式基金同源于 ``fund_open_fund_info_em`` 的分红送配详情；
-    除息日缺失（未实施）的记录剔除，``每10份分红`` 文本不解析。
-    """
-    raw = _call(ak.fund_open_fund_info_em, symbol=code, indicator="分红送配详情")
-    if raw is None:
-        return None
-    if raw.empty:
-        return pd.DataFrame(columns=list(FUND_DIVIDEND_COLUMNS))
-
-    frame = pd.DataFrame({"date": pd.to_datetime(raw["除息日"], errors="coerce")})
-    return frame.dropna(subset=["date"]).sort_values("date").reset_index(drop=True)
-
-
-def get_fund_overview(code: str) -> dict | None:
-    """基金概况原始串（``scale``/``tracker``）；慢变档（``TTL_SLOW``，规模季度更新）。"""
-    return _cached(
-        f"fund_overview:{code}", lambda: _fetch_fund_overview(code), TTL_SLOW
-    )
-
-
-def _fetch_fund_overview(code: str) -> dict | None:
-    """基金概况 ``{"scale": str | None, "tracker": str | None}``；失败 → None。
-
-    取 ``fund_overview_em`` 首行的 ``净资产规模`` 与 ``跟踪标的`` 原始串，
-    不做解析或可用性判定（是否支持指数 PE 由 ``resolve_index_symbol`` 负责）。
-    """
-    raw = _call(ak.fund_overview_em, symbol=code)
-    if raw is None or raw.empty:
-        return None
-    row = raw.iloc[0]
-    return {
-        "scale": _clean_str(row.get("净资产规模")),
-        "tracker": _clean_str(row.get("跟踪标的")),
-    }
-
-
-# ---------------------------------------------------------------------------
 # 指数 PE
 # ---------------------------------------------------------------------------
-
-
-def resolve_index_symbol(
-    configured: str | None, tracker: str | None
-) -> str | None:
-    """解析用于指数 PE 分位的指数名；无法解析 → None 并记 warning。
-
-    ``configured``（配置的 ``fund.index``）优先，须原样命中 ``SUPPORTED_INDEX_PE``；
-    否则用 ``tracker``（基金概况的跟踪标的）去掉 ``指数``/``全收益`` 后缀后校验。
-    配置了不支持项同样告警（不做 tracker 回退），便于定位错误配置。
-    """
-    configured = _clean_str(configured)
-    if configured is not None:
-        if configured in SUPPORTED_INDEX_PE:
-            return configured
-        logger.warning(
-            "配置的指数 %s 不支持指数 PE 查询（stock_index_pe_lg），跳过指数估值指标",
-            configured,
-        )
-        return None
-
-    tracker = _clean_str(tracker)
-    normalized = _strip_tracker_suffix(tracker)
-    if normalized is not None and normalized in SUPPORTED_INDEX_PE:
-        return normalized
-    logger.warning(
-        "跟踪标的 %s 无法映射到支持指数 PE 查询的指数，跳过指数估值指标", tracker
-    )
-    return None
-
-
-def _clean_str(value) -> str | None:
-    """去首尾空白后的字符串；缺失或空串 → None。"""
-    if value is None or pd.isna(value):
-        return None
-    text = str(value).strip()
-    return text or None
-
-
-def _strip_tracker_suffix(tracker: str | None) -> str | None:
-    """去掉跟踪标的结尾的 ``指数``/``全收益``（上证红利全收益指数 → 上证红利）。"""
-    name = _clean_str(tracker)
-    if name is None:
-        return None
-    for suffix in ("指数", "全收益"):
-        if name.endswith(suffix):
-            name = name[: -len(suffix)]
-    return name or None
 
 
 def get_index_pe_history(index_symbol: str) -> pd.DataFrame | None:
