@@ -18,7 +18,7 @@ DEFAULT_DATA: dict[str, int] = {
     "financial_cache_days": 30,
     "index_refresh_days": 14,
     # 取数缓存三档（详见 src/data.py 的 TTL_LIVE/TTL_DAILY/TTL_SLOW 与 README）
-    "quote_cache_minutes": 0,  # 实时档：行情/最新净值，0 = 每次运行都取最新
+    "quote_cache_minutes": 0,  # 实时档：行情，0 = 每次运行都取最新
     "daily_cache_hours": 6,  # 日频档：K线/指数PE/指数股息率/国债
     "slow_cache_days": 7,  # 慢变档：分红明细
     "candidate_top_n": 0,  # 成分股按总市值取前 N（0 = 不筛）
