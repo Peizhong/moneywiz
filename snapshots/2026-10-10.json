@@ -1,12 +1,12 @@
 {
-  "schema": 1,
+  "schema": 3,
   "as_of": "2026-10-10",
-  "created_at": "2026-10-10T11:06:02+07:00",
-  "elapsed_s": 94.75123293600018,
+  "created_at": "2026-10-10T22:52:55+07:00",
+  "elapsed_s": 2.5015835060003155,
   "market": {
     "dividend_yield": 4.24,
-    "bond_10y": 1.6864,
-    "spread": 2.5536000000000003,
+    "bond_10y": 1.6849,
+    "spread": 2.5551000000000004,
     "index_pe_position": 14.19832582099163
   },
   "stocks": [
@@ -104,6 +104,7 @@
         },
         "sustainability_flags": [],
         "turnover_wan": 19339.162,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 1,
@@ -142,7 +143,7 @@
         "missing": [],
         "tech": {
           "macd": "金叉",
-          "rsi": 56.41825127100572
+          "rsi": 56.418251271005744
         },
         "position": 90.3991915108641,
         "sustainability": {
@@ -224,6 +225,10 @@
         },
         "sustainability_flags": [],
         "turnover_wan": 104150.012875,
+        "holding": {
+          "cost": 11.226,
+          "pnl_pct": 3.242472830928193
+        },
         "new_constituent": false
       },
       "rank": 2,
@@ -357,6 +362,7 @@
           }
         ],
         "turnover_wan": 148152.94275,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 2,
@@ -453,6 +459,7 @@
         },
         "sustainability_flags": [],
         "turnover_wan": 37118.051615,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 4,
@@ -580,6 +587,10 @@
           }
         ],
         "turnover_wan": 214881.61975,
+        "holding": {
+          "cost": 82.687,
+          "pnl_pct": -0.27452924885411717
+        },
         "new_constituent": false
       },
       "rank": 5,
@@ -684,6 +695,7 @@
           }
         ],
         "turnover_wan": 96321.40725,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 6,
@@ -705,7 +717,7 @@
           "pb_vs_industry": -45.94594594594595,
           "ma60_position": -3.5861857878896015,
           "momentum_5d": 1.1235955056179678,
-          "volatility": 17.807591677652546,
+          "volatility": 17.80759167765255,
           "max_drawdown": 14.686248331108153
         },
         "scores": {
@@ -818,6 +830,10 @@
           }
         ],
         "turnover_wan": 49797.68815,
+        "holding": {
+          "cost": 6.292,
+          "pnl_pct": 0.12714558169103635
+        },
         "new_constituent": false
       },
       "rank": 7,
@@ -945,6 +961,10 @@
           }
         ],
         "turnover_wan": 146167.53225,
+        "holding": {
+          "cost": 27.707,
+          "pnl_pct": -0.16963222290396143
+        },
         "new_constituent": false
       },
       "rank": 8,
@@ -1056,6 +1076,7 @@
           }
         ],
         "turnover_wan": 162883.85945,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 8,
@@ -1176,6 +1197,10 @@
         },
         "sustainability_flags": [],
         "turnover_wan": 34424.6704,
+        "holding": {
+          "cost": 27.816,
+          "pnl_pct": 3.5375323554788674
+        },
         "new_constituent": false
       },
       "rank": 10,
@@ -1296,6 +1321,7 @@
         },
         "sustainability_flags": [],
         "turnover_wan": 100938.49347,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 10,
@@ -1416,6 +1442,7 @@
         },
         "sustainability_flags": [],
         "turnover_wan": 175162.979975,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 10,
@@ -1536,6 +1563,7 @@
         },
         "sustainability_flags": [],
         "turnover_wan": 347692.056,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 10,
@@ -1574,9 +1602,9 @@
         "missing": [],
         "tech": {
           "macd": "",
-          "rsi": 57.1640706856793
+          "rsi": 57.164070685679285
         },
-        "position": 81.13207547169819,
+        "position": 81.13207547169809,
         "sustainability": {
           "eps_growth": 4.5654,
           "eps_period": "2026-06-30",
@@ -1656,6 +1684,7 @@
         },
         "sustainability_flags": [],
         "turnover_wan": 79316.6512,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 10,
@@ -1783,6 +1812,7 @@
           }
         ],
         "turnover_wan": 40881.692610000006,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 15,
@@ -1903,6 +1933,7 @@
         },
         "sustainability_flags": [],
         "turnover_wan": 289754.04175,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 16,
@@ -2023,6 +2054,10 @@
         },
         "sustainability_flags": [],
         "turnover_wan": 291164.67225,
+        "holding": {
+          "cost": 27.696,
+          "pnl_pct": 4.67215482380126
+        },
         "new_constituent": false
       },
       "rank": 16,
@@ -2151,6 +2186,7 @@
           }
         ],
         "turnover_wan": 85963.9128,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 18,
@@ -2274,6 +2310,7 @@
           }
         ],
         "turnover_wan": 17998.1685,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 19,
@@ -2401,6 +2438,7 @@
           }
         ],
         "turnover_wan": 115643.0124,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 19,
@@ -2422,7 +2460,7 @@
           "pb_vs_industry": -28.509154315605933,
           "ma60_position": 5.990929561384038,
           "momentum_5d": 1.4571948998178519,
-          "volatility": 16.611747168257047,
+          "volatility": 16.61174716825705,
           "max_drawdown": 15.8075601374572
         },
         "scores": {
@@ -2520,6 +2558,7 @@
           }
         ],
         "turnover_wan": 76778.9766,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 19,
@@ -2647,6 +2686,7 @@
           }
         ],
         "turnover_wan": 25087.4153,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 22,
@@ -2767,6 +2807,7 @@
         },
         "sustainability_flags": [],
         "turnover_wan": 121874.11,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 23,
@@ -2859,6 +2900,7 @@
         },
         "sustainability_flags": [],
         "turnover_wan": 14355.6866,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 23,
@@ -2993,6 +3035,7 @@
           }
         ],
         "turnover_wan": 75871.92848,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 23,
@@ -3014,8 +3057,8 @@
           "pb_vs_industry": 29.032258064516125,
           "ma60_position": 4.491525423728804,
           "momentum_5d": 1.1070110701106992,
-          "volatility": 18.82598209821846,
-          "max_drawdown": 15.219175021686882
+          "volatility": 18.825982098218454,
+          "max_drawdown": 15.219175021686892
         },
         "scores": {
           "dividend_yield": 0.5,
@@ -3113,6 +3156,10 @@
         },
         "sustainability_flags": [],
         "turnover_wan": 270423.82355,
+        "holding": {
+          "cost": 6.024,
+          "pnl_pct": 36.45418326693228
+        },
         "new_constituent": false
       },
       "rank": 23,
@@ -3134,7 +3181,7 @@
           "pb_vs_industry": 16.82650392327812,
           "ma60_position": 9.117361784675083,
           "momentum_5d": -0.11098779134294992,
-          "volatility": 20.802207535542216,
+          "volatility": 20.80220753554222,
           "max_drawdown": 16.43754737795735
         },
         "scores": {
@@ -3209,6 +3256,7 @@
         },
         "sustainability_flags": [],
         "turnover_wan": 46762.89735,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 23,
@@ -3324,6 +3372,7 @@
           }
         ],
         "turnover_wan": 50239.3564,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 28,
@@ -3344,9 +3393,9 @@
           "pe_vs_industry": 4.856101732728494,
           "pb_vs_industry": 2.8770706190060955,
           "ma60_position": 8.103100900859179,
-          "momentum_5d": 2.9100529100529187,
-          "volatility": 17.851100926549563,
-          "max_drawdown": 14.901754101899833
+          "momentum_5d": 2.9100529100529062,
+          "volatility": 17.851100926549552,
+          "max_drawdown": 14.901754101899812
         },
         "scores": {
           "dividend_yield": 1.0,
@@ -3362,7 +3411,7 @@
         "missing": [],
         "tech": {
           "macd": "",
-          "rsi": 68.22037161835462
+          "rsi": 68.22037161835463
         },
         "position": 96.81122448979593,
         "sustainability": {
@@ -3440,6 +3489,7 @@
           }
         ],
         "turnover_wan": 128612.41895,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 28,
@@ -3560,6 +3610,7 @@
         },
         "sustainability_flags": [],
         "turnover_wan": 31832.08785,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 30,
@@ -3680,6 +3731,7 @@
         },
         "sustainability_flags": [],
         "turnover_wan": 168171.36990000002,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 30,
@@ -3800,6 +3852,7 @@
         },
         "sustainability_flags": [],
         "turnover_wan": 144859.8746,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 30,
@@ -3919,6 +3972,7 @@
           }
         ],
         "turnover_wan": 218160.1719,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 33,
@@ -4046,6 +4100,7 @@
           }
         ],
         "turnover_wan": 125773.4387,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 33,
@@ -4166,6 +4221,7 @@
         },
         "sustainability_flags": [],
         "turnover_wan": 249953.2218,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 35,
@@ -4293,6 +4349,7 @@
           }
         ],
         "turnover_wan": 19772.82065,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 36,
@@ -4314,7 +4371,7 @@
           "pb_vs_industry": -5.8413251961639014,
           "ma60_position": -0.10234392551358383,
           "momentum_5d": 0.45180722891566644,
-          "volatility": 24.575014040517818,
+          "volatility": 24.57501404051782,
           "max_drawdown": 16.541198192849848
         },
         "scores": {
@@ -4331,7 +4388,7 @@
         "missing": [],
         "tech": {
           "macd": "",
-          "rsi": 49.408048033346105
+          "rsi": 49.40804803334612
         },
         "position": 45.789043336058846,
         "sustainability": {
@@ -4420,6 +4477,7 @@
           }
         ],
         "turnover_wan": 41085.51915,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 37,
@@ -4540,6 +4598,7 @@
         },
         "sustainability_flags": [],
         "turnover_wan": 32136.13485,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 38,
@@ -4561,8 +4620,8 @@
           "pb_vs_industry": -23.278116826503926,
           "ma60_position": -0.07440050363416263,
           "momentum_5d": 2.4647887323943762,
-          "volatility": 18.099353877059553,
-          "max_drawdown": 12.836105652789943
+          "volatility": 18.099353877059546,
+          "max_drawdown": 12.836105652789875
         },
         "scores": {
           "dividend_yield": 1.0,
@@ -4643,6 +4702,7 @@
           }
         ],
         "turnover_wan": 39548.5836,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 39,
@@ -4763,6 +4823,7 @@
         },
         "sustainability_flags": [],
         "turnover_wan": 118301.5545,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 40,
@@ -4785,7 +4846,7 @@
           "ma60_position": 7.010441082463238,
           "momentum_5d": 0.9650180940892652,
           "volatility": 16.432217334388806,
-          "max_drawdown": 10.242651759361332
+          "max_drawdown": 10.24265175936131
         },
         "scores": {
           "dividend_yield": 1.0,
@@ -4897,6 +4958,7 @@
           }
         ],
         "turnover_wan": 20449.7801,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 40,
@@ -5009,6 +5071,7 @@
           }
         ],
         "turnover_wan": 14309.97505,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 42,
@@ -5142,6 +5205,7 @@
           }
         ],
         "turnover_wan": 10919.619770000001,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 43,
@@ -5269,6 +5333,7 @@
           }
         ],
         "turnover_wan": 114955.8196,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 43,
@@ -5291,7 +5356,7 @@
           "ma60_position": 1.3690158266100647,
           "momentum_5d": 6.183745583038863,
           "volatility": 22.70565823417277,
-          "max_drawdown": 17.718780727630325
+          "max_drawdown": 17.71878072763031
         },
         "scores": {
           "dividend_yield": 1.0,
@@ -5403,6 +5468,7 @@
           }
         ],
         "turnover_wan": 17731.25305,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 45,
@@ -5536,6 +5602,7 @@
           }
         ],
         "turnover_wan": 425264.968,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 46,
@@ -5656,6 +5723,7 @@
           }
         ],
         "turnover_wan": 60058.6069,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 46,
@@ -5678,7 +5746,7 @@
           "ma60_position": 1.831409202758311,
           "momentum_5d": 0.8670520231213945,
           "volatility": 16.74568097219703,
-          "max_drawdown": 23.333333333333293
+          "max_drawdown": 23.33333333333326
         },
         "scores": {
           "dividend_yield": 1.0,
@@ -5694,7 +5762,7 @@
         "missing": [],
         "tech": {
           "macd": "",
-          "rsi": 51.29455156219984
+          "rsi": 51.29455156219986
         },
         "position": 81.2154696132597,
         "sustainability": {
@@ -5774,6 +5842,7 @@
           }
         ],
         "turnover_wan": 84476.15461,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 48,
@@ -5908,6 +5977,10 @@
           }
         ],
         "turnover_wan": 23727.405,
+        "holding": {
+          "cost": 5.661,
+          "pnl_pct": -6.0236707295530705
+        },
         "new_constituent": false
       },
       "rank": 48,
@@ -6036,6 +6109,7 @@
           }
         ],
         "turnover_wan": 80703.4839,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 50,
@@ -6164,6 +6238,7 @@
           }
         ],
         "turnover_wan": 149756.1307,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 50,
@@ -6292,6 +6367,7 @@
           }
         ],
         "turnover_wan": 13421.6053,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 50,
@@ -6332,7 +6408,7 @@
           "macd": "",
           "rsi": 56.98115592509403
         },
-        "position": 82.27344992050868,
+        "position": 82.27344992050874,
         "sustainability": {
           "eps_growth": 27.3048,
           "eps_period": "2026-06-30",
@@ -6412,6 +6488,7 @@
         },
         "sustainability_flags": [],
         "turnover_wan": 120806.491675,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 53,
@@ -6433,8 +6510,8 @@
           "pb_vs_industry": 37.75065387968614,
           "ma60_position": 8.86869823912519,
           "momentum_5d": 2.2658610271903243,
-          "volatility": 20.220624124900038,
-          "max_drawdown": 14.610971742320277
+          "volatility": 20.220624124900034,
+          "max_drawdown": 14.6109717423203
         },
         "scores": {
           "dividend_yield": 0.5,
@@ -6450,9 +6527,9 @@
         "missing": [],
         "tech": {
           "macd": "金叉",
-          "rsi": 66.25774743226413
+          "rsi": 66.25774743226411
         },
-        "position": 97.07388441843453,
+        "position": 97.07388441843446,
         "sustainability": {
           "eps_growth": 4.6719,
           "eps_period": "2026-06-30",
@@ -6532,6 +6609,10 @@
         },
         "sustainability_flags": [],
         "turnover_wan": 160531.59835,
+        "holding": {
+          "cost": 4.635,
+          "pnl_pct": 46.06256742179072
+        },
         "new_constituent": false
       },
       "rank": 53,
@@ -6553,7 +6634,7 @@
           "pb_vs_industry": 48.21272885789014,
           "ma60_position": 3.586445708632211,
           "momentum_5d": 1.6011644832605576,
-          "volatility": 23.479262766917785,
+          "volatility": 23.47926276691778,
           "max_drawdown": 28.857569775883796
         },
         "scores": {
@@ -6570,7 +6651,7 @@
         "missing": [],
         "tech": {
           "macd": "",
-          "rsi": 57.07038678235984
+          "rsi": 57.070386782359826
         },
         "position": 89.25619834710746,
         "sustainability": {
@@ -6659,6 +6740,7 @@
           }
         ],
         "turnover_wan": 249004.1706,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 55,
@@ -6786,6 +6868,7 @@
           }
         ],
         "turnover_wan": 25920.7128,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 55,
@@ -6914,6 +6997,7 @@
           }
         ],
         "turnover_wan": 23869.0534,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 57,
@@ -6935,7 +7019,7 @@
           "pb_vs_industry": -37.22755013077594,
           "ma60_position": 0.327868852459024,
           "momentum_5d": 2.0000000000000018,
-          "volatility": 15.098503746333822,
+          "volatility": 15.098503746333837,
           "max_drawdown": 18.762926364859933
         },
         "scores": {
@@ -6952,9 +7036,9 @@
         "missing": [],
         "tech": {
           "macd": "",
-          "rsi": 54.99589552916822
+          "rsi": 54.9958955291682
         },
-        "position": 63.1578947368421,
+        "position": 63.15789473684206,
         "sustainability": {
           "eps_growth": -23.8592,
           "eps_period": "2026-06-30",
@@ -7033,6 +7117,7 @@
           }
         ],
         "turnover_wan": 55018.81275,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 58,
@@ -7153,6 +7238,7 @@
         },
         "sustainability_flags": [],
         "turnover_wan": 322663.9854,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 58,
@@ -7273,6 +7359,7 @@
         },
         "sustainability_flags": [],
         "turnover_wan": 9148798.7848,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 58,
@@ -7407,6 +7494,7 @@
           }
         ],
         "turnover_wan": 13562.93285,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 61,
@@ -7535,6 +7623,7 @@
           }
         ],
         "turnover_wan": 34679.87985,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 62,
@@ -7554,9 +7643,9 @@
           "payout_ratio": 72.88001848049281,
           "pe_vs_industry": -6.138242363838896,
           "pb_vs_industry": -29.001203369434414,
-          "ma60_position": 1.8757408827836535,
+          "ma60_position": 1.8757408827836157,
           "momentum_5d": 4.5064377682403425,
-          "volatility": 14.960074810314646,
+          "volatility": 14.96007481031465,
           "max_drawdown": 23.303918028347002
         },
         "scores": {
@@ -7663,6 +7752,10 @@
           }
         ],
         "turnover_wan": 51344.081099999996,
+        "holding": {
+          "cost": 4.811,
+          "pnl_pct": 1.2263562668883843
+        },
         "new_constituent": false
       },
       "rank": 62,
@@ -7791,6 +7884,7 @@
           }
         ],
         "turnover_wan": 2286777.5244,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 62,
@@ -7918,6 +8012,7 @@
           }
         ],
         "turnover_wan": 19137242.7899,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 65,
@@ -8053,6 +8148,7 @@
           }
         ],
         "turnover_wan": 135040.6105,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 66,
@@ -8074,7 +8170,7 @@
           "pb_vs_industry": 173.75762859633826,
           "ma60_position": 6.2537947783849415,
           "momentum_5d": 3.0927835051546384,
-          "volatility": 23.865672124550773,
+          "volatility": 23.86567212455078,
           "max_drawdown": 17.805704908121122
         },
         "scores": {
@@ -8164,6 +8260,7 @@
           }
         ],
         "turnover_wan": 19795.90865,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 67,
@@ -8292,6 +8389,7 @@
           }
         ],
         "turnover_wan": 99537.746,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 67,
@@ -8419,6 +8517,7 @@
           }
         ],
         "turnover_wan": 273363.41795,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 69,
@@ -8539,6 +8638,7 @@
         },
         "sustainability_flags": [],
         "turnover_wan": 12711.91035,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 69,
@@ -8672,6 +8772,7 @@
           }
         ],
         "turnover_wan": 14470.55025,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 69,
@@ -8693,7 +8794,7 @@
           "pb_vs_industry": 34.387351778656125,
           "ma60_position": 8.458961474036828,
           "momentum_5d": 11.63793103448276,
-          "volatility": 42.35753259411364,
+          "volatility": 42.35753259411363,
           "max_drawdown": 45.58080808080807
         },
         "scores": {
@@ -8805,6 +8906,7 @@
           }
         ],
         "turnover_wan": 60617.93825,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 72,
@@ -8925,6 +9027,7 @@
           }
         ],
         "turnover_wan": 98461.61200000001,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 73,
@@ -9052,6 +9155,7 @@
           }
         ],
         "turnover_wan": 135457.17445,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 74,
@@ -9172,6 +9276,7 @@
         },
         "sustainability_flags": [],
         "turnover_wan": 110177.8904,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 75,
@@ -9292,6 +9397,7 @@
         },
         "sustainability_flags": [],
         "turnover_wan": 207256.29285,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 76,
@@ -9427,6 +9533,7 @@
           }
         ],
         "turnover_wan": 125061.0933,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 77,
@@ -9562,6 +9669,7 @@
           }
         ],
         "turnover_wan": 125546.93395,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 77,
@@ -9690,6 +9798,7 @@
           }
         ],
         "turnover_wan": 76085.33925,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 79,
@@ -9818,6 +9927,7 @@
           }
         ],
         "turnover_wan": 39205.25755,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 79,
@@ -9938,6 +10048,7 @@
         },
         "sustainability_flags": [],
         "turnover_wan": 111710.8917,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 81,
@@ -10054,6 +10165,7 @@
         },
         "sustainability_flags": [],
         "turnover_wan": 46882.6909,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 81,
@@ -10188,6 +10300,7 @@
           }
         ],
         "turnover_wan": 336241.0757,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 83,
@@ -10321,6 +10434,7 @@
           }
         ],
         "turnover_wan": 13900470.7682,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 84,
@@ -10441,43 +10555,12 @@
         },
         "sustainability_flags": [],
         "turnover_wan": 505309.33715,
+        "holding": null,
         "new_constituent": false
       },
       "rank": 85,
       "tied_count": 1,
       "signal": "末位"
-    }
-  ],
-  "funds": [
-    {
-      "item": {
-        "code": "510880",
-        "name": "红利ETF",
-        "total": 67.5,
-        "values": {
-          "discount_rate": -0.06408015845274839,
-          "nav_trend_20d": -0.06403912208185951,
-          "index_pe_vs_history": 14.19832582099163,
-          "dividend_frequency": 1,
-          "fund_size": 222.76
-        },
-        "scores": {
-          "discount_rate": 0.5,
-          "nav_trend_20d": 0.5,
-          "index_pe_vs_history": 1.0,
-          "dividend_frequency": 0.5,
-          "fund_size": 1.0
-        },
-        "missing": [],
-        "tech": null,
-        "position": 89.26254694434954,
-        "sustainability": null,
-        "sustainability_flags": [],
-        "turnover_wan": null
-      },
-      "rank": 1,
-      "tied_count": 1,
-      "signal": "观察"
     }
   ]
 }
