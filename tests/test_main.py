@@ -29,6 +29,7 @@ STOCKS_CONFIG = {
         {"code": STOCK_B, "name": "招商银行"},
     ]
 }
+HOLDINGS_CONFIG = {"holdings": []}
 RULES_CONFIG = {
     "stocks": {
         "indicators": {
@@ -96,6 +97,7 @@ def config_dir(tmp_path):
         ("stocks.yaml", STOCKS_CONFIG),
         ("rules.yaml", RULES_CONFIG),
         ("dividend_index.yaml", CONSTITUENTS_CONFIG),
+        ("holdings.yaml", HOLDINGS_CONFIG),
     ):
         (directory / filename).write_text(
             yaml.safe_dump(payload, allow_unicode=True, sort_keys=False),
@@ -603,6 +605,7 @@ def test_run_scores_dividend_trend(monkeypatch, tmp_path):
         ("stocks.yaml", STOCKS_CONFIG),
         ("rules.yaml", rules),
         ("dividend_index.yaml", CONSTITUENTS_CONFIG),
+        ("holdings.yaml", HOLDINGS_CONFIG),
     ):
         (config_dir / filename).write_text(
             yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8"
@@ -635,6 +638,7 @@ def test_run_scores_dividend_yield_percentile(monkeypatch, tmp_path):
         ("stocks.yaml", STOCKS_CONFIG),
         ("rules.yaml", rules),
         ("dividend_index.yaml", CONSTITUENTS_CONFIG),
+        ("holdings.yaml", HOLDINGS_CONFIG),
     ):
         (config_dir / filename).write_text(
             yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8"
@@ -665,6 +669,7 @@ def test_run_scores_stability_and_reports_liquidity_hint(monkeypatch, tmp_path):
         ("stocks.yaml", STOCKS_CONFIG),
         ("rules.yaml", rules),
         ("dividend_index.yaml", CONSTITUENTS_CONFIG),
+        ("holdings.yaml", HOLDINGS_CONFIG),
     ):
         (config_dir / filename).write_text(
             yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8"

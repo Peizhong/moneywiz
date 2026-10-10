@@ -8,6 +8,7 @@ import yaml
 from src.config import (
     ConfigError,
     ConstituentCfg,
+    HoldingCfg,
     StockCfg,
     load_config,
 )
@@ -51,17 +52,22 @@ CONSTITUENTS = {
     ]
 }
 
+HOLDINGS = {
+    "holdings": [{"code": "600036", "cost": 32.5}],
+}
+
 
 def _write_config(
-    tmp_path, *, stocks=STOCKS, rules=RULES, constituents=CONSTITUENTS
+    tmp_path, *, stocks=STOCKS, rules=RULES, constituents=CONSTITUENTS, holdings=HOLDINGS
 ):
-    """把给定内容写成 config/ 下的三个 YAML 文件，传入 None 表示不写该文件。"""
+    """把给定内容写成 config/ 下的四个 YAML 文件，传入 None 表示不写该文件。"""
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     for filename, data in (
         ("stocks.yaml", stocks),
         ("rules.yaml", rules),
         ("dividend_index.yaml", constituents),
+        ("holdings.yaml", holdings),
     ):
         if data is not None:
             (config_dir / filename).write_text(
@@ -79,6 +85,7 @@ def test_load_valid_config(tmp_path):
     ]
     assert cfg.rules["stocks"]["indicators"]["dividend_yield"]["weight"] == 60
     assert cfg.rules["data"]["pe_cache_days"] == 7
+    assert cfg.holdings == [HoldingCfg(code="600036", cost=32.5)]
 
 
 def test_missing_code_raises_config_error(tmp_path):
@@ -91,6 +98,30 @@ def test_missing_code_raises_config_error(tmp_path):
     message = str(excinfo.value)
     assert "stocks.yaml" in message
     assert "code" in message
+
+
+def test_holdings_cost_must_be_positive(tmp_path):
+    holdings = copy.deepcopy(HOLDINGS)
+    holdings["holdings"][0]["cost"] = 0
+    with pytest.raises(ConfigError) as exc_info:
+        load_config(_write_config(tmp_path, holdings=holdings))
+    assert "holdings.yaml" in str(exc_info.value)
+    assert "cost" in str(exc_info.value)
+
+
+def test_holdings_cost_rejects_bool(tmp_path):
+    holdings = copy.deepcopy(HOLDINGS)
+    holdings["holdings"][0]["cost"] = True  # bool 是 int 子类，必须显式拒绝
+    with pytest.raises(ConfigError):
+        load_config(_write_config(tmp_path, holdings=holdings))
+
+
+def test_holdings_missing_code_raises_config_error(tmp_path):
+    holdings = copy.deepcopy(HOLDINGS)
+    holdings["holdings"][0]["code"] = ""
+    with pytest.raises(ConfigError) as exc_info:
+        load_config(_write_config(tmp_path, holdings=holdings))
+    assert "holdings[0].code" in str(exc_info.value)
 
 
 def test_stocks_weights_must_sum_to_100(tmp_path):
@@ -174,6 +205,7 @@ def test_load_real_project_config():
         item.index_code and item.constituents for item in cfg.indices
     )
     assert all(s.code and s.name for s in cfg.stocks)
+    assert isinstance(cfg.holdings, list)
 
 
 def test_non_utf8_config_raises_config_error(tmp_path):

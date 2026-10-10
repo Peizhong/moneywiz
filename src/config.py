@@ -29,6 +29,7 @@ FILENAMES = {
     "stocks": "stocks.yaml",
     "rules": "rules.yaml",
     "constituents": "dividend_index.yaml",
+    "holdings": "holdings.yaml",
 }
 
 
@@ -40,6 +41,12 @@ class ConfigError(Exception):
 class StockCfg:
     code: str
     name: str
+
+
+@dataclass
+class HoldingCfg:
+    code: str
+    cost: float
 
 
 @dataclass
@@ -63,10 +70,11 @@ class Config:
     rules: dict
     output: dict
     indices: list[IndexCfg]
+    holdings: list[HoldingCfg]
 
 
 def load_config(config_dir: Path = Path("config")) -> Config:
-    """读取 config_dir 下的三个 YAML（自选/规则/指数成分股）并校验。"""
+    """读取 config_dir 下的四个 YAML（自选/规则/指数成分股/持仓）并校验。"""
     config_dir = Path(config_dir)
     raw = {
         key: _load_yaml(config_dir / filename)
@@ -76,11 +84,13 @@ def load_config(config_dir: Path = Path("config")) -> Config:
     stocks = _parse_stocks(config_dir / FILENAMES["stocks"], raw["stocks"])
     rules, output = _parse_rules(config_dir / FILENAMES["rules"], raw["rules"])
     indices = _parse_indices(config_dir / FILENAMES["constituents"], raw["constituents"])
+    holdings = _parse_holdings(config_dir / FILENAMES["holdings"], raw["holdings"])
     return Config(
         stocks=stocks,
         rules=rules,
         output=output,
         indices=indices,
+        holdings=holdings,
     )
 
 
@@ -181,6 +191,21 @@ def _parse_stocks(path: Path, data: Any) -> list[StockCfg]:
             )
         )
     return stocks
+
+
+def _parse_holdings(path: Path, data: Any) -> list[HoldingCfg]:
+    holdings: list[HoldingCfg] = []
+    for i, item in enumerate(_list_section(path, "holdings", data)):
+        if not isinstance(item, dict):
+            raise ConfigError(f"{path}: 'holdings[{i}]' 必须是映射")
+        code = _required_str(path, item, "code", f"holdings[{i}].code")
+        cost = item.get("cost")
+        if isinstance(cost, bool) or not isinstance(cost, (int, float)) or cost <= 0:
+            raise ConfigError(
+                f"{path}: 'holdings[{i}].cost' 必须是正数（每股成本，元），实际为 {cost!r}"
+            )
+        holdings.append(HoldingCfg(code=code, cost=float(cost)))
+    return holdings
 
 
 def _parse_rules(path: Path, data: Any) -> tuple[dict, dict]:
