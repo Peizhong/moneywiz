@@ -27,11 +27,6 @@ PE_INDUSTRY_TH = {"discount": -30, "premium": 30}
 PB_INDUSTRY_TH = {"discount": -30, "premium": 30}
 MA60_TH = {"sweet_low": -5, "sweet_high": 5, "max_deviation": 20}
 MOMENTUM_TH = {"oversold": -10, "overbought": 10}
-DISCOUNT_TH = {"discount": -1, "premium": 1}
-NAV_TREND_TH = {"pullback": -10, "rally": 5}
-INDEX_PE_TH = {"low": 30, "high": 70}
-FREQUENCY_TH = {"high": 2, "mid": 1}
-FUND_SIZE_TH = {"min": 1}
 
 
 @pytest.mark.parametrize(
@@ -53,29 +48,13 @@ FUND_SIZE_TH = {"min": 1}
         ("ma60_position", 0, MA60_TH, 1.0),
         ("ma60_position", 12, MA60_TH, 0.5),
         ("ma60_position", 25, MA60_TH, 0.0),
-        # index_pe_vs_history {low: 30, high: 70}
-        ("index_pe_vs_history", 20, INDEX_PE_TH, 1.0),
-        ("index_pe_vs_history", 50, INDEX_PE_TH, 0.5),
-        ("index_pe_vs_history", 80, INDEX_PE_TH, 0.0),
-        # fund_size {min: 1}
-        ("fund_size", 0.5, FUND_SIZE_TH, 0.0),
-        ("fund_size", 2, FUND_SIZE_TH, 1.0),
         # 同档位形状的其余指标同样逐档校验
         ("dividend_years", 5, YEARS_TH, 1.0),
         ("dividend_years", 3, YEARS_TH, 0.5),
         ("dividend_years", 2, YEARS_TH, 0.0),
-        ("dividend_frequency", 2, FREQUENCY_TH, 1.0),
-        ("dividend_frequency", 1, FREQUENCY_TH, 0.5),
-        ("dividend_frequency", 0, FREQUENCY_TH, 0.0),
         ("pb_vs_industry", -35, PB_INDUSTRY_TH, 1.0),
         ("pb_vs_industry", 0, PB_INDUSTRY_TH, 0.5),
         ("pb_vs_industry", 35, PB_INDUSTRY_TH, 0.0),
-        ("discount_rate", -2, DISCOUNT_TH, 1.0),
-        ("discount_rate", 0, DISCOUNT_TH, 0.5),
-        ("discount_rate", 2, DISCOUNT_TH, 0.0),
-        ("nav_trend_20d", -15, NAV_TREND_TH, 1.0),
-        ("nav_trend_20d", 0, NAV_TREND_TH, 0.5),
-        ("nav_trend_20d", 10, NAV_TREND_TH, 0.0),
         ("momentum_5d", -15, MOMENTUM_TH, 1.0),
         ("momentum_5d", 0, MOMENTUM_TH, 0.5),
         ("momentum_5d", 15, MOMENTUM_TH, 0.0),
@@ -105,7 +84,6 @@ def test_normalize_tier_boundaries(indicator, value, thresholds, expected):
         ("dividend_yield", YIELD_TH),
         ("payout_ratio", PAYOUT_TH),
         ("ma60_position", MA60_TH),
-        ("fund_size", FUND_SIZE_TH),
     ],
 )
 def test_normalize_none_value_returns_none(indicator, thresholds):

@@ -28,9 +28,7 @@ def _higher_better(value: float, thresholds: dict) -> float:
 def _two_sided(good_key: str, bad_key: str) -> Tier:
     """构造「越低越好」档位函数：``v<=good→1.0; v<bad→0.5; else 0.0``。
 
-    用于 PE/PB 相对行业的折价（discount/premium）、场内折价率、
-    净值回撤（pullback/rally）、动量超卖（oversold/overbought）、
-    指数 PE 历史分位（low/high）。
+    用于 PE/PB 相对行业的折价（discount/premium）与动量超卖（oversold/overbought）。
     """
 
     def tier(value: float, thresholds: dict) -> float:
@@ -59,30 +57,18 @@ def _sweet_band(value: float, thresholds: dict) -> float:
     return 0.0
 
 
-def _at_least_min(value: float, thresholds: dict) -> float:
-    """下限满分：``v>=min→1.0; else 0.0``。"""
-    if value >= thresholds["min"]:
-        return 1.0
-    return 0.0
-
-
 _TIERS: dict[str, Tier] = {
     "dividend_yield": _higher_better,
     "dividend_yield_percentile": _higher_better,  # 当前股息率相对自身历史的分位
     "dividend_years": _higher_better,
     "volatility": _two_sided("low", "mid"),  # 年化波动率：越低越好（稳定优先）
     "max_drawdown": _two_sided("low", "mid"),  # 近一年最大回撤：越低越好
-    "dividend_frequency": _higher_better,
     "dividend_trend": _higher_better,  # 阈值 {high: 0, mid: -30}：分红下降越大分越低
     "payout_ratio": _range,
     "pe_vs_industry": _two_sided("discount", "premium"),
     "pb_vs_industry": _two_sided("discount", "premium"),
-    "discount_rate": _two_sided("discount", "premium"),
-    "nav_trend_20d": _two_sided("pullback", "rally"),
     "momentum_5d": _two_sided("oversold", "overbought"),
     "ma60_position": _sweet_band,
-    "index_pe_vs_history": _two_sided("low", "high"),
-    "fund_size": _at_least_min,
 }
 
 # 分红可持续性红标的默认扣分（可在 rules.yaml 的 stocks.sustainability 覆盖）
