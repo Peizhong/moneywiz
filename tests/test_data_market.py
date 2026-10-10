@@ -3,6 +3,8 @@
 全部 monkeypatch akshare 函数返回真实列名的原始帧，不联网。
 """
 
+import logging
+
 import akshare as ak
 import pandas as pd
 import pytest
@@ -174,17 +176,36 @@ def test_index_pe_history_empty_source_returns_empty_frame_with_columns(monkeypa
     assert list(out.columns) == ["date", "pe"]
 
 
+def test_index_pe_history_failure_returns_none_after_retry(monkeypatch, caplog):
+    """乐咕失败 → warning（含 akshare 函数名）+ 重试 1 次，仍失败 → None。"""
+    attempts = []
+
+    def fake(**kwargs):
+        attempts.append(1)
+        raise ConnectionError("网络超时")
+
+    fake.__name__ = "stock_index_pe_lg"  # 仿冒真名，断言 warning 里出现的是 akshare 函数名
+    monkeypatch.setattr(ak, "stock_index_pe_lg", fake)
+
+    with caplog.at_level(logging.WARNING):
+        out = get_index_pe_history("上证红利")
+
+    assert out is None
+    assert len(attempts) == 2  # 重试 1 次
+    assert "stock_index_pe_lg" in caplog.text  # warning 含 akshare 函数名
+
+
 # ---------------------------------------------------------------------------
 # 取数缓存分档（configure_cache）：温度计三项都走日频档
 # ---------------------------------------------------------------------------
 
 
 def test_market_indicators_use_daily_tier(monkeypatch, tmp_path):
-    """股息率/国债默认缓存（日频档）：每个交易日更新一次即可。
+    """股息率/国债/指数 PE 默认缓存（日频档）：每个交易日更新一次即可。
 
     若被误标为实时档（默认不缓存），下面的计数会是 2。
     """
-    counts = {"yield": 0, "bond": 0}
+    counts = {"yield": 0, "bond": 0, "pe": 0}
 
     def fake_index_value(symbol):
         counts["yield"] += 1
@@ -194,12 +215,35 @@ def test_market_indicators_use_daily_tier(monkeypatch, tmp_path):
         counts["bond"] += 1
         return _bond_frame()
 
+    def fake_pe(**kwargs):
+        counts["pe"] += 1
+        return _index_pe_frame()
+
     monkeypatch.setattr(ak, "stock_zh_index_value_csindex", fake_index_value)
     monkeypatch.setattr(ak, "bond_zh_us_rate", fake_bond)
+    monkeypatch.setattr(ak, "stock_index_pe_lg", fake_pe)
     data.configure_cache(tmp_path)
 
     for _ in range(2):
         get_index_dividend_yield("000922")
         get_10y_bond_yield()
+        get_index_pe_history("上证红利")
 
-    assert counts == {"yield": 1, "bond": 1}
+    assert counts == {"yield": 1, "bond": 1, "pe": 1}
+
+
+def test_index_pe_history_not_cached_when_daily_ttl_zero(monkeypatch, tmp_path):
+    """日频档 TTL 为 0（不缓存）时，指数 PE 每次调用都重新取数。"""
+    counts = {"pe": 0}
+
+    def fake_pe(**kwargs):
+        counts["pe"] += 1
+        return _index_pe_frame()
+
+    monkeypatch.setattr(ak, "stock_index_pe_lg", fake_pe)
+    data.configure_cache(tmp_path, daily_seconds=0)
+
+    for _ in range(2):
+        get_index_pe_history("上证红利")
+
+    assert counts == {"pe": 2}
