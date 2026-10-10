@@ -662,7 +662,11 @@ def test_render_detail_shows_holding_line():
     )
     row = {"item": held, "rank": 1, "tied_count": 1, "signal": "买入"}
     text = render_detail(row, DETAIL_RULES)
-    assert "持仓 成本 32.50 浮亏 -20.0%" in text
+    assert "持仓 成本 32.50 盈亏 -20.0%" in text
+
+    held["holding"]["pnl_pct"] = 5.0
+    text = render_detail({"item": held, "rank": 1, "tied_count": 1, "signal": "买入"}, DETAIL_RULES)
+    assert "持仓 成本 32.50 盈亏 +5.0%" in text
 
     held["holding"]["pnl_pct"] = None
     text = render_detail({"item": held, "rank": 1, "tied_count": 1, "signal": "买入"}, DETAIL_RULES)

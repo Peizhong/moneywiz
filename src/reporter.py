@@ -313,7 +313,7 @@ def render_detail(row: dict, rules_section: dict) -> str:
     if holding:
         header += f"   持仓 成本 {holding['cost']:.2f}"
         if holding["pnl_pct"] is not None:
-            header += f" 浮亏 {holding['pnl_pct']:+.1f}%"
+            header += f" 盈亏 {holding['pnl_pct']:+.1f}%"
     table = tabulate(
         [
             [
