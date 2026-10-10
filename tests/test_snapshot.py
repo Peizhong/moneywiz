@@ -8,7 +8,10 @@ import json
 from datetime import date
 
 import numpy as np
+import pytest
 
+import snapshot as snapshot_cli
+from src import config
 from src.snapshot import write_snapshot
 
 AS_OF = date(2026, 10, 10)
@@ -111,3 +114,36 @@ def test_write_snapshot_normalizes_numpy_values(tmp_path):
     assert item["sustainability"]["interest_cover"] is None  # NaN → None
     assert data["market"]["index_pe_position"] == 42
     assert isinstance(data["market"]["index_pe_position"], int)
+
+
+def _scan_stub():
+    """与 _scan 同构；CLI 不依赖实现细节，单独构造。"""
+    return _scan(
+        report="【股票】\n扫描 1 只标的（股票 1 / 基金 0），数据不足 0，耗时 1.0s"
+    )
+
+
+def test_snapshot_cli_writes_snapshot_and_prints_path(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(snapshot_cli, "run_scan", lambda **kw: _scan_stub())
+
+    assert snapshot_cli.main(snapshot_dir=tmp_path) == 0
+
+    assert (tmp_path / "2026-10-10.json").is_file()
+    captured = capsys.readouterr()
+    assert str(tmp_path / "2026-10-10.json") in captured.out
+    assert "扫描 1 只标的" in captured.out  # 摘要行
+
+
+def test_snapshot_cli_config_error_returns_one_without_snapshot(
+    monkeypatch, tmp_path, capsys
+):
+    def failing_scan(**kw):
+        raise config.ConfigError("stocks.yaml: 配置文件不存在")
+
+    monkeypatch.setattr(snapshot_cli, "run_scan", failing_scan)
+
+    assert snapshot_cli.main(snapshot_dir=tmp_path) == 1
+
+    assert list(tmp_path.iterdir()) == []  # 配置错误不写快照
+    captured = capsys.readouterr()
+    assert "stocks.yaml: 配置文件不存在" in captured.err
