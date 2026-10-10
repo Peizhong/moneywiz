@@ -57,6 +57,7 @@ def _result(
     position=None,
     sustainability=None,
     turnover_wan=None,
+    holding=None,
 ):
     """按 reporter 契约组装单只标的的 result dict。
 
@@ -82,6 +83,7 @@ def _result(
             sustainability, rules_section.get("sustainability")
         ),
         "turnover_wan": turnover_wan,
+        "holding": holding,
     }
 
 
@@ -189,6 +191,7 @@ def _stock_result(
     pe_cache_days,
     financial_cache_days,
     rules_section,
+    holding_cost=None,
 ):
     """组装一只股票：每个数据源独立降级，任一失败只影响对应指标。"""
     row = _spot_row(spot, stock.code)
@@ -198,6 +201,13 @@ def _stock_result(
     price = _num(row["price"]) if row is not None else None
     pe = _num(row["pe"]) if row is not None else None
     pb = _num(row["pb"]) if row is not None else None
+
+    holding = None
+    if holding_cost is not None:
+        pnl = None
+        if price is not None:
+            pnl = (price - holding_cost) / holding_cost * 100.0
+        holding = {"cost": holding_cost, "pnl_pct": _num(pnl)}
 
     dividends = _fetch(
         lambda: data.get_dividend_history(stock.code),
@@ -256,6 +266,7 @@ def _stock_result(
             stock.code, dividends, as_of, cache_dir, financial_cache_days
         ),
         turnover_wan=_num(indicators.calc_turnover_amount(kline)),
+        holding=holding,
     )
 
 
@@ -293,8 +304,12 @@ def _sustainability(code, dividends, as_of, cache_dir, financial_cache_days):
     }
 
 
-def _scan_stocks(watchlist, constituent_entries):
-    """扫描清单 = 自选 ∪ 成分股（按代码去重；自选优先，保留其名称）。"""
+def _scan_stocks(watchlist, constituent_entries, holdings=()):
+    """扫描清单 = 自选 ∪ 成分股 ∪ 持仓（按代码去重；自选优先保留名称）。
+
+    返回 ``(stocks, holding_costs)``：持仓股随清单一并评估，``holding_costs``
+    是代码 → 每股成本（元）的映射（持仓代码必在其中，无论是否新并入清单）。
+    """
     stocks = list(watchlist)
     known = {stock.code for stock in stocks}
     for entry in constituent_entries:
@@ -304,7 +319,13 @@ def _scan_stocks(watchlist, constituent_entries):
                 config.StockCfg(code=code, name=str(entry.get("name") or code))
             )
             known.add(code)
-    return stocks
+    holding_costs: dict[str, float] = {}
+    for holding in holdings:
+        if holding.code and holding.code not in known:
+            stocks.append(config.StockCfg(code=holding.code, name=holding.code))
+            known.add(holding.code)
+        holding_costs[holding.code] = holding.cost
+    return stocks, holding_costs
 
 
 def _market_context():
@@ -377,7 +398,7 @@ def run_scan(
     new_codes = constituents.new_constituent_codes(refresh["constituents"], refresh_days)
     # 先按全量候选取行情（一次批量请求），据总市值把成分股裁到前 N，
     # 再跑逐股取数——裁剪省下的是最贵的部分。
-    all_stocks = _scan_stocks(cfg.stocks, refresh["constituents"])
+    all_stocks, _ = _scan_stocks(cfg.stocks, refresh["constituents"], cfg.holdings)
     spot = _fetch(
         lambda: data.get_stock_spot([stock.code for stock in all_stocks]),
         "get_stock_spot",
@@ -386,7 +407,13 @@ def run_scan(
         refresh["constituents"], spot, data_cfg["candidate_top_n"]
     )
     _log_candidate_selection(selection, data_cfg["candidate_top_n"])
-    scan_stocks = _scan_stocks(cfg.stocks, selection["kept"])
+    scan_stocks, holding_costs = _scan_stocks(cfg.stocks, selection["kept"], cfg.holdings)
+    # 纯持仓股（名称暂为代码）从行情表回填真实名称；行情缺失时保持显示代码
+    for stock in scan_stocks:
+        if stock.name == stock.code:
+            row = _spot_row(spot, stock.code)
+            if row is not None:
+                stock.name = str(row["name"])
     market = _market_context()
 
     stock_results = []
@@ -400,6 +427,7 @@ def run_scan(
             pe_cache_days,
             data_cfg["financial_cache_days"],
             cfg.rules["stocks"],
+            holding_cost=holding_costs.get(stock.code),
         )
         result["new_constituent"] = stock.code in new_codes
         stock_results.append(result)

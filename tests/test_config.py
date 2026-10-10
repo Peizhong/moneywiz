@@ -116,6 +116,13 @@ def test_holdings_cost_rejects_bool(tmp_path):
         load_config(_write_config(tmp_path, holdings=holdings))
 
 
+def test_holdings_cost_rejects_nan(tmp_path):
+    holdings = copy.deepcopy(HOLDINGS)
+    holdings["holdings"][0]["cost"] = float("nan")
+    with pytest.raises(ConfigError):
+        load_config(_write_config(tmp_path, holdings=holdings))
+
+
 def test_holdings_missing_code_raises_config_error(tmp_path):
     holdings = copy.deepcopy(HOLDINGS)
     holdings["holdings"][0]["code"] = ""

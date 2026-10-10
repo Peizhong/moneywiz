@@ -29,6 +29,7 @@ STOCKS_CONFIG = {
         {"code": STOCK_B, "name": "招商银行"},
     ]
 }
+HOLDING_CODE = "600519"  # 贵州茅台（持仓测试用；不在自选/成分股名单）
 HOLDINGS_CONFIG = {"holdings": []}
 RULES_CONFIG = {
     "stocks": {
@@ -298,6 +299,161 @@ def test_run_merges_constituents_and_marks_new(monkeypatch, config_dir, tmp_path
     # 自选 2 只 + 新成分股 1 只（重叠的平安银行不重复）
     assert "扫描 3 只股票" in report
     assert report.count("平安银行") == 1
+
+
+def test_run_evaluates_holdings_only_stock(monkeypatch, config_dir, tmp_path):
+    """纯持仓股（不在自选/成分股）也参与评估：名称回填、成本与浮亏入 result。"""
+    holdings = {"holdings": [{"code": HOLDING_CODE, "cost": 32.5}]}
+    (config_dir / "holdings.yaml").write_text(
+        yaml.safe_dump(holdings, allow_unicode=True), encoding="utf-8"
+    )
+    spot = pd.concat(
+        [
+            SPOT,
+            pd.DataFrame(
+                {
+                    "code": [HOLDING_CODE],
+                    "name": ["贵州茅台"],
+                    "price": [26.0],
+                    "pe": [10.0],
+                    "pb": [3.0],
+                }
+            ),
+        ],
+        ignore_index=True,
+    )
+    _patch_data(
+        monkeypatch,
+        **_happy_overrides(
+            get_stock_spot=lambda codes: spot,
+            get_kline=lambda code, days=120, as_of=None: {
+                STOCK_A: KLINE_A,
+                STOCK_B: KLINE_B,
+                HOLDING_CODE: KLINE_A,
+            }[code],
+            get_dividend_history=lambda code: {
+                STOCK_A: DIVIDENDS_A,
+                STOCK_B: DIVIDENDS_B,
+                HOLDING_CODE: DIVIDENDS_A,
+            }[code],
+            get_industry_pe_pb=lambda code, cache_dir, cache_days=7: {
+                STOCK_A: INDUSTRY[STOCK_A],
+                STOCK_B: INDUSTRY[STOCK_B],
+                HOLDING_CODE: {"industry": "白酒", "pe": 10.0, "pb": 3.0},
+            }[code],
+        ),
+    )
+
+    scan = main.run_scan(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
+
+    holding_items = [r for r in scan["stock_results"] if r["holding"] is not None]
+    assert [r["code"] for r in holding_items] == [HOLDING_CODE]
+    assert holding_items[0]["holding"] == {
+        "cost": 32.5,
+        "pnl_pct": pytest.approx(-20.0),  # (26 - 32.5) / 32.5
+    }
+    assert holding_items[0]["name"] == "贵州茅台"  # 行情表名称回填（「(持仓)」标记由渲染层任务实现）
+    row = _row_for(scan["report"], "贵州茅台")
+
+
+def test_run_watchlist_stock_also_holding_appears_once(monkeypatch, config_dir, tmp_path):
+    """同一代码在自选与持仓：只出一行（自选名优先），该行带 holding。"""
+    holdings = {"holdings": [{"code": STOCK_A, "cost": 10.0}]}
+    (config_dir / "holdings.yaml").write_text(
+        yaml.safe_dump(holdings, allow_unicode=True), encoding="utf-8"
+    )
+    _patch_data(monkeypatch, **_happy_overrides())
+
+    scan = main.run_scan(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
+
+    codes = [r["code"] for r in scan["stock_results"]]
+    assert codes.count(STOCK_A) == 1
+    item = next(r for r in scan["stock_results"] if r["code"] == STOCK_A)
+    assert item["holding"] == {"cost": 10.0, "pnl_pct": 0.0}  # 现价 10 = 成本 10
+    assert item["name"] == "平安银行"  # 自选名优先，不被持仓覆盖
+
+
+def test_run_holding_missing_from_spot_keeps_cost_only(monkeypatch, config_dir, tmp_path):
+    """持仓股不在行情表：pnl 缺失（有成本但无法估算浮亏），名称显示代码。"""
+    holdings = {"holdings": [{"code": HOLDING_CODE, "cost": 32.5}]}
+    (config_dir / "holdings.yaml").write_text(
+        yaml.safe_dump(holdings, allow_unicode=True), encoding="utf-8"
+    )
+    _patch_data(
+        monkeypatch,
+        **_happy_overrides(
+            get_kline=lambda code, days=120, as_of=None: {
+                STOCK_A: KLINE_A,
+                STOCK_B: KLINE_B,
+                HOLDING_CODE: KLINE_A,
+            }[code],
+            get_dividend_history=lambda code: {
+                STOCK_A: DIVIDENDS_A,
+                STOCK_B: DIVIDENDS_B,
+                HOLDING_CODE: DIVIDENDS_A,
+            }[code],
+            get_industry_pe_pb=lambda code, cache_dir, cache_days=7: {
+                STOCK_A: INDUSTRY[STOCK_A],
+                STOCK_B: INDUSTRY[STOCK_B],
+                HOLDING_CODE: {"industry": "白酒", "pe": 10.0, "pb": 3.0},
+            }[code],
+        ),
+    )
+
+    scan = main.run_scan(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
+
+    item = next(r for r in scan["stock_results"] if r["code"] == HOLDING_CODE)
+    assert item["holding"] == {"cost": 32.5, "pnl_pct": None}
+    assert item["name"] == HOLDING_CODE  # 无行情名回填 → 显示代码
+
+
+def test_run_holdings_survive_candidate_trimming(monkeypatch, config_dir, tmp_path):
+    """持仓不参与 candidate_top_n 裁剪：成分股被裁掉，持仓股仍在报告。"""
+    entries = [
+        {"code": "601088", "name": "中国神华"},
+        {"code": "600028", "name": "中国石化"},
+    ]
+    holdings = {"holdings": [{"code": HOLDING_CODE, "cost": 32.5}]}
+    (config_dir / "holdings.yaml").write_text(
+        yaml.safe_dump(holdings, allow_unicode=True), encoding="utf-8"
+    )
+    _write_rules(config_dir, candidate_top_n=1)
+    spot = _spot_with_cap(
+        {
+            STOCK_A: 2245.26,
+            STOCK_B: 10405.71,
+            "601088": 8000.0,
+            "600028": 7000.0,
+            HOLDING_CODE: 15000.0,
+        }
+    )
+    _patch_data(
+        monkeypatch,
+        constituents_result=entries,
+        **_happy_overrides(
+            get_stock_spot=lambda codes: spot,
+            get_kline=lambda code, days=120, as_of=None: {
+                STOCK_A: KLINE_A,
+                STOCK_B: KLINE_B,
+                HOLDING_CODE: KLINE_A,
+            }[code],
+            get_dividend_history=lambda code: {
+                STOCK_A: DIVIDENDS_A,
+                STOCK_B: DIVIDENDS_B,
+                HOLDING_CODE: DIVIDENDS_A,
+            }[code],
+            get_industry_pe_pb=lambda code, cache_dir, cache_days=7: {
+                STOCK_A: INDUSTRY[STOCK_A],
+                STOCK_B: INDUSTRY[STOCK_B],
+                HOLDING_CODE: {"industry": "白酒", "pe": 10.0, "pb": 3.0},
+            }[code],
+        ),
+    )
+
+    report = main.run(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
+
+    assert "600028" not in report  # 成分股被市值裁剪掉
+    assert HOLDING_CODE in report  # 持仓股保留（名称回填为行情表名 = 代码，故按代码断言）
 
 
 def _write_rules(config_dir, **data_overrides):

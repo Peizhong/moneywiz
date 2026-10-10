@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
+import math
 from pathlib import Path
 from typing import Any
 
@@ -200,7 +201,12 @@ def _parse_holdings(path: Path, data: Any) -> list[HoldingCfg]:
             raise ConfigError(f"{path}: 'holdings[{i}]' 必须是映射")
         code = _required_str(path, item, "code", f"holdings[{i}].code")
         cost = item.get("cost")
-        if isinstance(cost, bool) or not isinstance(cost, (int, float)) or cost <= 0:
+        if (
+            isinstance(cost, bool)
+            or not isinstance(cost, (int, float))
+            or not math.isfinite(cost)
+            or cost <= 0
+        ):
             raise ConfigError(
                 f"{path}: 'holdings[{i}].cost' 必须是正数（每股成本，元），实际为 {cost!r}"
             )
