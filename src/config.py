@@ -12,7 +12,6 @@ from typing import Any
 
 import yaml
 
-FUND_TYPES = {"etf", "lof", "normal"}
 DEFAULT_DATA: dict[str, int] = {
     "kline_days": 120,
     "pe_cache_days": 7,
@@ -20,15 +19,14 @@ DEFAULT_DATA: dict[str, int] = {
     "index_refresh_days": 14,
     # 取数缓存三档（详见 src/data.py 的 TTL_LIVE/TTL_DAILY/TTL_SLOW 与 README）
     "quote_cache_minutes": 0,  # 实时档：行情/最新净值，0 = 每次运行都取最新
-    "daily_cache_hours": 6,  # 日频档：K线/净值/指数PE/指数股息率/国债
-    "slow_cache_days": 7,  # 慢变档：分红明细/基金分红/基金概况
+    "daily_cache_hours": 6,  # 日频档：K线/指数PE/指数股息率/国债
+    "slow_cache_days": 7,  # 慢变档：分红明细
     "candidate_top_n": 0,  # 成分股按总市值取前 N（0 = 不筛）
 }
 DEFAULT_OUTPUT: dict[str, int] = {"buy_top_n": 5, "avoid_bottom_n": 5}
 
 FILENAMES = {
     "stocks": "stocks.yaml",
-    "funds": "funds.yaml",
     "rules": "rules.yaml",
     "constituents": "dividend_index.yaml",
 }
@@ -42,14 +40,6 @@ class ConfigError(Exception):
 class StockCfg:
     code: str
     name: str
-
-
-@dataclass
-class FundCfg:
-    code: str
-    name: str
-    type: str
-    index: str | None = None
 
 
 @dataclass
@@ -70,14 +60,13 @@ class IndexCfg:
 @dataclass
 class Config:
     stocks: list[StockCfg]
-    funds: list[FundCfg]
     rules: dict
     output: dict
     indices: list[IndexCfg]
 
 
 def load_config(config_dir: Path = Path("config")) -> Config:
-    """读取 config_dir 下的四个 YAML（自选/基金/规则/指数成分股）并校验。"""
+    """读取 config_dir 下的三个 YAML（自选/规则/指数成分股）并校验。"""
     config_dir = Path(config_dir)
     raw = {
         key: _load_yaml(config_dir / filename)
@@ -85,12 +74,10 @@ def load_config(config_dir: Path = Path("config")) -> Config:
     }
 
     stocks = _parse_stocks(config_dir / FILENAMES["stocks"], raw["stocks"])
-    funds = _parse_funds(config_dir / FILENAMES["funds"], raw["funds"])
     rules, output = _parse_rules(config_dir / FILENAMES["rules"], raw["rules"])
     indices = _parse_indices(config_dir / FILENAMES["constituents"], raw["constituents"])
     return Config(
         stocks=stocks,
-        funds=funds,
         rules=rules,
         output=output,
         indices=indices,
@@ -196,34 +183,11 @@ def _parse_stocks(path: Path, data: Any) -> list[StockCfg]:
     return stocks
 
 
-def _parse_funds(path: Path, data: Any) -> list[FundCfg]:
-    funds: list[FundCfg] = []
-    for i, item in enumerate(_list_section(path, "funds", data)):
-        if not isinstance(item, dict):
-            raise ConfigError(f"{path}: 'funds[{i}]' 必须是映射")
-        fund_type = _required_str(path, item, "type", f"funds[{i}].type")
-        if fund_type not in FUND_TYPES:
-            raise ConfigError(
-                f"{path}: 'funds[{i}].type' 必须是 {sorted(FUND_TYPES)} 之一，"
-                f"实际为 {fund_type!r}"
-            )
-        funds.append(
-            FundCfg(
-                code=_required_str(path, item, "code", f"funds[{i}].code"),
-                name=_required_str(path, item, "name", f"funds[{i}].name"),
-                type=fund_type,
-                index=item.get("index"),
-            )
-        )
-    return funds
-
-
 def _parse_rules(path: Path, data: Any) -> tuple[dict, dict]:
     if not isinstance(data, dict):
         raise ConfigError(f"{path}: 顶层必须是映射，实际为 {type(data).__name__}")
 
-    for section in ("stocks", "funds"):
-        _validate_indicators(path, section, data.get(section))
+    _validate_indicators(path, "stocks", data.get("stocks"))
 
     rules = dict(data)
     rules["data"] = _section_with_defaults(path, data, "data", DEFAULT_DATA)

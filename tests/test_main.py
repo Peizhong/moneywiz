@@ -21,18 +21,12 @@ AS_OF = date(2026, 10, 6)
 
 STOCK_A = "000001"  # 平安银行（分红强）
 STOCK_B = "600036"  # 招商银行（分红弱）
-FUND_CODE = "510880"  # 红利ETF
 
-# 与 config/rules.yaml 同口径：股票/基金权重各自合计 100
+# 与 config/rules.yaml 同口径：股票指标权重合计 100
 STOCKS_CONFIG = {
     "stocks": [
         {"code": STOCK_A, "name": "平安银行"},
         {"code": STOCK_B, "name": "招商银行"},
-    ]
-}
-FUNDS_CONFIG = {
-    "funds": [
-        {"code": FUND_CODE, "name": "红利ETF", "type": "etf", "index": "上证红利"}
     ]
 }
 RULES_CONFIG = {
@@ -54,15 +48,6 @@ RULES_CONFIG = {
                 "thresholds": {"sweet_low": -5, "sweet_high": 5, "max_deviation": 20},
             },
             "momentum_5d": {"weight": 5, "thresholds": {"oversold": -10, "overbought": 10}},
-        }
-    },
-    "funds": {
-        "indicators": {
-            "discount_rate": {"weight": 25, "thresholds": {"discount": -1, "premium": 1}},
-            "nav_trend_20d": {"weight": 25, "thresholds": {"pullback": -10, "rally": 5}},
-            "index_pe_vs_history": {"weight": 25, "thresholds": {"low": 30, "high": 70}},
-            "dividend_frequency": {"weight": 15, "thresholds": {"high": 2, "mid": 1}},
-            "fund_size": {"weight": 10, "thresholds": {"min": 1}},
         }
     },
     # 缓存三档故意取非默认值：默认值相同的话，main 是否真的读了配置就测不出来
@@ -109,7 +94,6 @@ def config_dir(tmp_path):
     directory.mkdir()
     for filename, payload in (
         ("stocks.yaml", STOCKS_CONFIG),
-        ("funds.yaml", FUNDS_CONFIG),
         ("rules.yaml", RULES_CONFIG),
         ("dividend_index.yaml", CONSTITUENTS_CONFIG),
     ):
@@ -611,21 +595,12 @@ def test_run_scores_dividend_trend(monkeypatch, tmp_path):
                 "dividend_trend": {"weight": 100, "thresholds": {"high": 0, "mid": -30}}
             }
         },
-        "funds": {
-            "indicators": {
-                "discount_rate": {
-                    "weight": 100,
-                    "thresholds": {"discount": -1, "premium": 1},
-                }
-            }
-        },
         "data": {"kline_days": 120, "pe_cache_days": 7},
     }
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     for filename, payload in (
         ("stocks.yaml", STOCKS_CONFIG),
-        ("funds.yaml", FUNDS_CONFIG),
         ("rules.yaml", rules),
         ("dividend_index.yaml", CONSTITUENTS_CONFIG),
     ):
@@ -652,21 +627,12 @@ def test_run_scores_dividend_yield_percentile(monkeypatch, tmp_path):
                 }
             }
         },
-        "funds": {
-            "indicators": {
-                "discount_rate": {
-                    "weight": 100,
-                    "thresholds": {"discount": -1, "premium": 1},
-                }
-            }
-        },
         "data": {"kline_days": 120, "pe_cache_days": 7},
     }
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     for filename, payload in (
         ("stocks.yaml", STOCKS_CONFIG),
-        ("funds.yaml", FUNDS_CONFIG),
         ("rules.yaml", rules),
         ("dividend_index.yaml", CONSTITUENTS_CONFIG),
     ):
@@ -691,21 +657,12 @@ def test_run_scores_stability_and_reports_liquidity_hint(monkeypatch, tmp_path):
                 "max_drawdown": {"weight": 50, "thresholds": {"low": 15, "mid": 25}},
             }
         },
-        "funds": {
-            "indicators": {
-                "discount_rate": {
-                    "weight": 100,
-                    "thresholds": {"discount": -1, "premium": 1},
-                }
-            }
-        },
         "data": {"kline_days": 120, "pe_cache_days": 7},
     }
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     for filename, payload in (
         ("stocks.yaml", STOCKS_CONFIG),
-        ("funds.yaml", FUNDS_CONFIG),
         ("rules.yaml", rules),
         ("dividend_index.yaml", CONSTITUENTS_CONFIG),
     ):
