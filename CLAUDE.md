@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-红利投资筛选工具：读取自选股票与多个红利指数成分股，经 akshare/腾讯/新浪等数据源拉取行情、分红、年报数据，按 9 个指标加权打分（总分另受分红可持续性红标扣分），终端输出排序信号表。代码与文档以中文为主（docstrings、日志、README、提交信息）。
+红利投资筛选工具：读取自选股票、持仓与多个红利指数成分股，经 akshare/腾讯/新浪等数据源拉取行情、分红、年报数据，按 9 个指标加权打分（总分另受分红可持续性红标扣分），终端输出排序信号表。代码与文档以中文为主（docstrings、日志、README、提交信息）。
 
 设计与实现的原始文档在 `docs/superpowers/specs/` 与 `docs/superpowers/plans/`（含“关键口径决策”一节——改动打分/口径前先读它）。
 
@@ -34,7 +34,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt -r requiremen
 - **src/constituents.py** — 多指数成分股定期刷新：`config/dividend_index.yaml` 是 `indices` 列表，每个指数独立 `updated_at`；过期（`index_refresh_days`，默认 14 天）→ 从中证指数官网拉取 → 新成员写 `added` 字段并可标注、调出移除、**单指数失败沿用其旧名单**（不写时间戳，下轮重试），文件按当前内容整体重写。
 - **src/interactive.py** — 报表后的交互式详情（唯一 `import questionary` 的模块）：`enabled()` 只在 stdout 是 TTY 且未传 `--no-interactive` 时放行（管道/Docker/CI 一律跳过，绝不阻塞），`session()` 循环「选择 → 打印详情 → **等一次按键** → 回列表」直到 Ctrl-C/Ctrl-Q（questionary 的 select **不绑 Esc**，别在提示里写）。详情后必须等按键：列表几十行，立刻重绘会把详情顶出屏幕；暂停走 `unsafe_ask`（`ask()` 会吞掉 KeyboardInterrupt 并同样返回 None，无法区分「按了键」与「用户中断」）。详情文本由 `reporter.render_detail`（纯函数）渲染；选择列表与表格的名次/信号同源于 `reporter.ranked_rows`，别在别处重写。
 - **snapshot.py（根目录）与 src/snapshot.py** — 快照入口与写盘模块（`/moneywiz` skill 用）：`run_scan()` → `write_snapshot()` 写 `snapshots/YYYY-MM-DD.{json,txt}`（同日重复运行覆盖，历史全部保留，随代码仓库跟踪）。条目经 `reporter.ranked_rows` 包装（排名/信号只此一处实现）；数值归一化为 JSON 原生类型（NaN→None）；JSON 带 `schema` 版本号，改字段必须升版本；**数值对比只从 JSON 取**。`.claude/skills/moneywiz/SKILL.md` 是 skill 定义：运行 + 历史对比分析指引（分析由 Claude 生成，脚本不产出 diff）。
-- **main.py 的候选池裁剪** — `_select_constituents()` 在逐股取数**之前**把成分股裁到 `data.candidate_top_n` 名（rules.yaml，默认 0 = 不筛）：各指数条目按代码去重 → 按 `market_cap`（总市值，亿元）降序取前 N → 合并自选（自选不参与筛选、不占名额）。裁剪只决定入选、不重排输出。**个股取不到市值按严格口径剔除并在日志列出代码；但 `limit<=0`、行情整表不可用（None/空帧/缺 `market_cap` 列）、或一只候选都排不出市值时不筛**（否则名单会被丢光、报告近乎空白）——改动这里的失败分支前先想清楚这条。
+- **main.py 的候选池裁剪** — `_select_constituents()` 在逐股取数**之前**把成分股裁到 `data.candidate_top_n` 名（rules.yaml，默认 0 = 不筛）：各指数条目按代码去重 → 按 `market_cap`（总市值，亿元）降序取前 N → 合并自选与持仓（自选/持仓不参与筛选、不占名额）。裁剪只决定入选、不重排输出。**个股取不到市值按严格口径剔除并在日志列出代码；但 `limit<=0`、行情整表不可用（None/空帧/缺 `market_cap` 列）、或一只候选都排不出市值时不筛**（否则名单会被丢光、报告近乎空白）——改动这里的失败分支前先想清楚这条。
 
 ### 数据源回退与熔断（重要）
 
