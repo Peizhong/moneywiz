@@ -48,5 +48,5 @@ description: 红利投资筛选快照与分析。生成/复用当日快照并对
   （`reporter.render_detail` 需要的字段都在 item 里），不要再跑一遍取数；
 - **分析全程只读 JSON/缓存，不重复调取数脚本**——每天至多跑一次 `snapshot.py`，
   当日已有快照即复用（见「运行」）。
-- 历史快照（schema 1）含 `funds` 段、schema 2 起只有 `stocks`：对比新旧快照时
+- 历史快照（schema 1）含 `funds` 段、schema 2 起不再含该段：对比新旧快照时
   旧档的基金条目会自然消失，不是数据缺失或脚本错误，如实说明即可；
