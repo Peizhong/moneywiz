@@ -670,7 +670,7 @@ def test_render_detail_shows_holding_line():
 
     held["holding"]["pnl_pct"] = None
     text = render_detail({"item": held, "rank": 1, "tied_count": 1, "signal": "买入"}, DETAIL_RULES)
-    assert "持仓 成本 32.50" in text and "浮亏" not in text
+    assert "持仓 成本 32.50" in text and "盈亏" not in text
 
     plain = _result("600036", "招商银行", 80.0, scores={"dividend_yield": 1.0})
     text = render_detail(

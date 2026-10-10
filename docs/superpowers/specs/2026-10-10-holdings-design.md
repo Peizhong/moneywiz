@@ -100,3 +100,12 @@ holdings:
 2. `.venv/bin/python main.py --no-interactive`：持仓股出现在股票表、名称带 `(持仓)`、浮亏超阈值时风险列提示；非持仓行无标记。
 3. `snapshot.py`（手动验证时注意：同日覆盖会重写当日快照——若当日快照需保留则跳过，schema 3 由 test_snapshot 覆盖）：JSON `schema: 3`、持仓 item 含 `holding`。
 4. `grep -rn "holding" src/ main.py` 无残留（`holding` 为新增字段，全链一致）。
+
+---
+
+## 实施修订（2026-10-10）
+
+1. **详情头标签「浮亏」→「盈亏」**：原设计对盈利持仓会渲染「浮亏 +5.0%」，自相矛盾。
+   实现改为 `持仓 成本 {cost:.2f} 盈亏 {pnl:+.1f}%`（浮亏为负时仍如实显示亏损）。
+2. **成本校验补 `math.isfinite`**：YAML 的 `.nan`/`.inf` 能通过「正数」校验
+   （`cost <= 0` 对 NaN 为假），`_parse_holdings` 增加有限数判定。

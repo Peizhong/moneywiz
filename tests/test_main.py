@@ -353,7 +353,7 @@ def test_run_evaluates_holdings_only_stock(monkeypatch, config_dir, tmp_path):
         "pnl_pct": pytest.approx(-20.0),  # (26 - 32.5) / 32.5
     }
     assert holding_items[0]["name"] == "贵州茅台"  # 行情表名称回填（「(持仓)」标记由渲染层任务实现）
-    row = _row_for(scan["report"], "贵州茅台")
+    assert "(持仓)" in _row_for(scan["report"], "贵州茅台")
 
 
 def test_run_watchlist_stock_also_holding_appears_once(monkeypatch, config_dir, tmp_path):

@@ -408,7 +408,8 @@ def run_scan(
     )
     _log_candidate_selection(selection, data_cfg["candidate_top_n"])
     scan_stocks, holding_costs = _scan_stocks(cfg.stocks, selection["kept"], cfg.holdings)
-    # 纯持仓股（名称暂为代码）从行情表回填真实名称；行情缺失时保持显示代码
+    # 名称暂为代码的条目（纯持仓股、无名成分股）从行情表回填真实名称；
+    # 行情缺失时保持显示代码
     for stock in scan_stocks:
         if stock.name == stock.code:
             row = _spot_row(spot, stock.code)
