@@ -26,7 +26,8 @@ RULES_SECTION = {
 STOCK_HEADER = "【股票】"
 
 
-def _result(code, name, total, scores, missing=None, tech=None):
+def _result(code, name, total, scores, missing=None, tech=None, holding=None):
+    """构造 result dict；``holding`` 为 ``{"cost": float, "pnl_pct": float | None} | None``。"""
     return {
         "code": code,
         "name": name,
@@ -35,6 +36,7 @@ def _result(code, name, total, scores, missing=None, tech=None):
         "scores": scores,
         "missing": missing or [],
         "tech": tech,
+        "holding": holding,
     }
 
 
@@ -573,6 +575,104 @@ def test_risk_hint_respects_turnover_threshold_and_large_amount_scale():
 
     row = _table_rows(report, STOCK_HEADER)[0]
     assert "日均成交 1.5亿" in row  # 大额以亿显示
+
+
+def test_holding_marker_in_name_column():
+    held = _result(
+        "600036", "招商银行", 80.0, scores={"dividend_yield": 1.0},
+        holding={"cost": 32.5, "pnl_pct": -20.0},
+    )
+    row = _table_rows(render_report([held], OUTPUT_CFG, 1.0), STOCK_HEADER)[0]
+    assert "招商银行(持仓)" in row
+
+    held["new_constituent"] = True
+    row = _table_rows(render_report([held], OUTPUT_CFG, 1.0), STOCK_HEADER)[0]
+    assert "招商银行(持仓)(新增)" in row
+
+
+def test_holding_loss_phrase_uses_default_threshold():
+    """未传 risk_hints → 默认 -10%：浮亏 20% 提示，浮盈不提示。"""
+    held = _result(
+        "600036", "招商银行", 80.0, scores={"dividend_yield": 1.0},
+        holding={"cost": 32.5, "pnl_pct": -20.0},
+    )
+    row = _table_rows(render_report([held], OUTPUT_CFG, 1.0), STOCK_HEADER)[0]
+    assert "持仓浮亏 20%" in row
+
+    held["holding"]["pnl_pct"] = 5.0
+    row = _table_rows(render_report([held], OUTPUT_CFG, 1.0), STOCK_HEADER)[0]
+    assert "持仓浮亏" not in row
+
+
+def test_holding_loss_phrase_respects_configured_threshold():
+    held = _result(
+        "600036", "招商银行", 80.0, scores={"dividend_yield": 1.0},
+        holding={"cost": 32.5, "pnl_pct": -10.0},
+    )
+    row = _table_rows(
+        render_report([held], OUTPUT_CFG, 1.0, risk_hints={"holding_loss": -10}),
+        STOCK_HEADER,
+    )[0]
+    assert "持仓浮亏 10%" in row  # 阈值含等号：pnl <= holding_loss
+
+    held["holding"]["pnl_pct"] = -9.9
+    row = _table_rows(
+        render_report([held], OUTPUT_CFG, 1.0, risk_hints={"holding_loss": -10}),
+        STOCK_HEADER,
+    )[0]
+    assert "持仓浮亏" not in row
+
+    held["holding"]["pnl_pct"] = -20.0
+    row = _table_rows(
+        render_report([held], OUTPUT_CFG, 1.0, risk_hints={"holding_loss": -30}),
+        STOCK_HEADER,
+    )[0]
+    assert "持仓浮亏" not in row  # 阈值 -30：浮亏 20% 未达
+
+
+def test_holding_phrase_absent_when_pnl_unknown():
+    held = _result(
+        "600036", "招商银行", 80.0, scores={"dividend_yield": 1.0},
+        holding={"cost": 32.5, "pnl_pct": None},
+    )
+    row = _table_rows(render_report([held], OUTPUT_CFG, 1.0), STOCK_HEADER)[0]
+    assert "持仓浮亏" not in row
+
+
+def test_holding_phrase_after_turnover_hint():
+    """持仓提示与流动性提示同组，排在流动性之后。"""
+    held = _result(
+        "600036", "招商银行", 80.0, scores={"dividend_yield": 1.0},
+        holding={"cost": 32.5, "pnl_pct": -20.0},
+    )
+    held["turnover_wan"] = 1000.0
+    report = render_report(
+        [held], OUTPUT_CFG, 1.0, risk_hints={"turnover_low": 5000, "holding_loss": -10}
+    )
+    row = _table_rows(report, STOCK_HEADER)[0]
+    assert row.find("日均成交") < row.find("持仓浮亏")
+
+
+def test_render_detail_shows_holding_line():
+    from src.reporter import render_detail
+
+    held = _result(
+        "600036", "招商银行", 80.0, scores={"dividend_yield": 1.0},
+        holding={"cost": 32.5, "pnl_pct": -20.0},
+    )
+    row = {"item": held, "rank": 1, "tied_count": 1, "signal": "买入"}
+    text = render_detail(row, DETAIL_RULES)
+    assert "持仓 成本 32.50 浮亏 -20.0%" in text
+
+    held["holding"]["pnl_pct"] = None
+    text = render_detail({"item": held, "rank": 1, "tied_count": 1, "signal": "买入"}, DETAIL_RULES)
+    assert "持仓 成本 32.50" in text and "浮亏" not in text
+
+    plain = _result("600036", "招商银行", 80.0, scores={"dividend_yield": 1.0})
+    text = render_detail(
+        {"item": plain, "rank": 1, "tied_count": 1, "signal": "买入"}, DETAIL_RULES
+    )
+    assert "持仓" not in text
 
 
 def test_stability_tiers_show_in_highlight_and_risk_columns():

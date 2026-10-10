@@ -7,6 +7,7 @@ result dict 契约：
 ``{"code": str, "name": str, "total": float | None, "values": dict,
 "scores": dict | None, "missing": list[str],
 "tech": {"macd": str, "rsi": float | None} | None}``（tech 仅股票有）。
+``"holding": {"cost": float, "pnl_pct": float | None} | None``（持仓成本与浮亏，仅持仓股有）。
 ``total`` 为 None 表示该标的不可评分（数据不足）。
 """
 
@@ -51,6 +52,7 @@ POSITION_HIGH = 70.0
 
 # 风险提示默认阈值（rules.yaml 的 stocks.risk_hints 可覆盖）
 TURNOVER_LOW_DEFAULT = 5000.0  # 近 60 日均成交额 < 该值（万元）→ 风险列提示
+HOLDING_LOSS_DEFAULT = -10.0  # 持仓浮亏提示阈值（%，负数）：现价较成本亏损达到该幅度
 
 STOCK_HEADER = "【股票】"
 EMPTY_SECTION = "(无)"
@@ -198,6 +200,8 @@ def _table(
         )
         rank_text = _rank_text(rank, tied_count)
         name_text = item["name"]
+        if item.get("holding"):
+            name_text = f"{name_text}(持仓)"
         if item.get("new_constituent"):
             name_text = f"{name_text}(新增)"
         rows.append(
@@ -305,6 +309,11 @@ def render_detail(row: dict, rules_section: dict) -> str:
         f"{item['code']} {item['name']}   总分 {total_text}   "
         f"排名 {_rank_text(row['rank'], row['tied_count'])}   信号 {row['signal']}"
     )
+    holding = item.get("holding")
+    if holding:
+        header += f"   持仓 成本 {holding['cost']:.2f}"
+        if holding["pnl_pct"] is not None:
+            header += f" 浮亏 {holding['pnl_pct']:+.1f}%"
     table = tabulate(
         [
             [
@@ -430,17 +439,22 @@ def _risk_text(
 
 
 def _risk_hint_phrases(item: dict, risk_hints: dict | None) -> list[str]:
-    """流动性提示（只标注，不影响分数）：成交额低于阈值才出现。
+    """流动性/持仓提示（只标注，不影响分数）：达到阈值才出现。
 
     波动率自成为打分指标后不再在此提示——0.0 档会经零分档展示进风险列，
-    避免同一列出现两个口径的波动率数字。
+    避免同一列出现两个口径的波动率数字。持仓浮亏紧随流动性提示之后。
     """
     hints = risk_hints or {}
     turnover_low = float(hints.get("turnover_low", TURNOVER_LOW_DEFAULT))
+    holding_loss = float(hints.get("holding_loss", HOLDING_LOSS_DEFAULT))
     phrases = []
     turnover = item.get("turnover_wan")
     if turnover is not None and float(turnover) < turnover_low:
         phrases.append(f"日均成交 {_amount_text(float(turnover))}")
+    holding = item.get("holding")
+    pnl = holding.get("pnl_pct") if holding else None
+    if pnl is not None and pnl <= holding_loss:
+        phrases.append(f"持仓浮亏 {abs(pnl):.0f}%")
     return phrases
 
 
