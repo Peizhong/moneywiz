@@ -2,7 +2,24 @@
 # 持仓股会在运行时并入扫描清单，与其他股票按代码去重后统一评估；
 # 浮亏达到 risk_hints.holding_loss（默认 -10%）时，报告风险列提示「持仓浮亏 X%」。
 # 示例（取消注释即生效）：
-# holdings:
-#   - code: '600036'
-#     cost: 32.50
-holdings: []
+holdings:
+  - code: '601398'
+    cost: 6.024
+  - code: '601988'
+    cost: 4.635
+  - code: '000001'
+    cost: 11.226
+  - code: '600900'
+    cost: 27.696
+  - code: '600023'
+    cost: 5.661
+  - code: '601006'
+    cost: 4.811
+  - code: '600887'
+    cost: 27.707
+  - code: '600015'
+    cost: 6.292
+  - code: '000333'
+    cost: 82.687
+  - code: '002128'
+    cost: 27.816
