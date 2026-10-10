@@ -153,6 +153,18 @@ docker run --rm moneywiz pytest    # 容器内跑测试
 容器以非 root（uid 1000）运行；时区默认 `Asia/Shanghai`，可用 `-e TZ=...` 覆盖。
 容器默认没有 TTY，交互式详情会自动跳过；想要详情用 `docker run -it --rm moneywiz`。
 
+## 快照与历史分析
+
+`snapshot.py` 是快照入口：跑一遍筛选并把结果写成 `snapshots/YYYY-MM-DD.{json,txt}`
+两份快照（结构化榜单/指标 JSON + 与 main 相同的报告文本）。**同一天重复运行覆盖
+同名文件**（只保留最后一次），历史快照全部保留、不自动清理；`snapshots/` 已加入
+`.gitignore`。
+
+在 Claude Code 里输入 `/moneywiz`（skill 定义见 `.claude/skills/moneywiz/`）：
+skill 会运行快照脚本，然后对比历史快照（默认参照昨日、约 7 天前、约 30 天前）
+分析买入区进出、信号与总分变化、板块温度计趋势，输出中文变化分析。
+数值对比一律以 JSON 为准，txt 仅供人读。
+
 ## 输出说明
 
 ```
