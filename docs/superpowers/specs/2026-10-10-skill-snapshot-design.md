@@ -25,7 +25,7 @@
 
 2. **快照里的股票/基金条目存 `reporter.ranked_rows()` 的输出，而非裸 `stock_results`。** 榜单进出与信号变化是历史分析的重点，而排名/并列/信号只允许 `ranked_rows` 这一处实现（CLAUDE.md 硬约束：「选择列表与表格的名次/信号同源于 `reporter.ranked_rows`，别在别处重写」）。快照写盘时调用 `ranked_rows` 包装结果，即 `[{"rank", "tied_count", "signal", "item"}, ...]`，item 为完整 result dict（含 `values`/`scores`/`missing`/`tech`/`position`/`sustainability_flags`/`new_constituent` 等归因所需全部字段）。
 
-3. **`run_scan()` 返回值增加 `"market"`、`"elapsed"`、`"as_of"` 三个键。** 板块温度计（中证红利股息率/10Y 国债/利差/上证红利 PE 分位）是历史分析维度之一，但 `run_scan` 目前只把 `market` 传给 `render_report` 而不放进返回 dict；`elapsed` 与 `as_of` 同理（快照元信息需要）。给返回 dict 增加这三个键（新增键，向后兼容，现有消费方与测试不受影响），使 `write_snapshot` 的输入完全自包含。这是本设计中 main.py 的**唯一**改动；不做 `market` 这个则快照 CLI 要么重跑编排、要么从报告文本解析温度计数值——前者复制逻辑、后者违背决策 5。
+3. **`run_scan()` 返回值增加 `"market"`、`"fund_results"`、`"elapsed"`、`"as_of"` 四个键。** 板块温度计（中证红利股息率/10Y 国债/利差/上证红利 PE 分位）是历史分析维度之一，但 `run_scan` 目前只把 `market` 传给 `render_report` 而不放进返回 dict；`fund_results` 同样只在渲染时被消费（快照要存基金榜单条目）；`elapsed` 与 `as_of` 是快照元信息。给返回 dict 增加这四个键（新增键，向后兼容，现有消费方与测试不受影响），使 `write_snapshot` 的输入完全自包含。这是本设计中 main.py 的**唯一**改动；不做 `market`/`fund_results` 这两个则快照 CLI 要么重跑编排、要么从报告文本解析数值——前者复制逻辑、后者违背决策 5。
 
 4. **当天去重 = 文件名按天 + 原子覆盖。** 快照文件名为 `YYYY-MM-DD.json` / `YYYY-MM-DD.txt`，同日重复运行直接覆盖同名文件，无需清理逻辑。写盘用「先写临时文件再 `os.replace`」——写一半崩溃不留半截文件，坏快照会污染后续所有历史分析。日期取 `run_scan` 的 `as_of`（即本地当天），与报告内容一致。
 
@@ -68,7 +68,7 @@ def write_snapshot(scan: dict, snapshot_dir: Path) -> Path:
 
 ### `main.py`（唯一改动）
 
-- `run_scan()` 返回 dict 增加 `"elapsed": time.monotonic() - started` 与 `"market": market` 两个键（`render_report` 现在消费的 elapsed 值抽成局部变量后同时进返回 dict）。新增键向后兼容，现有消费方（`run`、`main`、交互式测试）不受影响。
+- `run_scan()` 返回 dict 增加 `"market": market`、`"fund_results": fund_results`、`"elapsed": <局部变量>`、`"as_of": as_of` 四个键（`render_report` 现在消费的 elapsed 值抽成局部变量后同时进返回 dict）。新增键向后兼容，现有消费方（`run`、`main`、交互式测试）不受影响。
 
 ### `snapshot.py`（新文件，根目录，与 main.py 平级）
 
