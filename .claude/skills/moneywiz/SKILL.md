@@ -36,6 +36,8 @@ description: 红利投资筛选快照与分析。生成/复用当日快照并对
    - 板块温度计趋势：`market` 的利差（spread）、上证红利 PE 分位（index_pe_position）；
    - 红标变化：`item.sustainability_flags` 新增/消失；
    - `item.new_constituent` 新成分股；
+   - 持仓变化：`item.holding` 浮亏加深/缓解（`pnl_pct` 与参照快照对比）、
+     持仓名单进出（有无 `holding` 字段）；
 4. 输出中文分析：变化摘要 + 值得注意的标的 + 带具体数字与快照日期的归因。
 
 ## 注意事项
@@ -50,3 +52,5 @@ description: 红利投资筛选快照与分析。生成/复用当日快照并对
   当日已有快照即复用（见「运行」）。
 - 历史快照（schema 1）含 `funds` 段、schema 2 起不再含该段：对比新旧快照时
   旧档的基金条目会自然消失，不是数据缺失或脚本错误，如实说明即可；
+- schema 3 起 `item` 含 `holding`（持仓成本与浮亏）；对比 schema ≤ 2 的历史快照时
+  `holding` 字段缺失，如实说明为「历史快照无持仓数据」，不当成真实变化；

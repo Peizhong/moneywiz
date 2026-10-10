@@ -34,6 +34,7 @@ def _scan(**overrides):
                 "sustainability": None,
                 "sustainability_flags": [],
                 "turnover_wan": None,
+                "holding": {"cost": 32.5, "pnl_pct": -20.0},
             }
         ],
         "rules": {"stocks": {"indicators": {}}},
@@ -60,7 +61,7 @@ def test_write_snapshot_creates_json_and_txt(tmp_path):
     assert json_path.is_file() and txt_path.is_file()
 
     data = json.loads(json_path.read_text(encoding="utf-8"))
-    assert data["schema"] == 2
+    assert data["schema"] == 3
     assert data["as_of"] == "2026-10-10"
     assert "created_at" in data
     assert data["elapsed_s"] == 1.5
@@ -70,6 +71,7 @@ def test_write_snapshot_creates_json_and_txt(tmp_path):
     assert set(row) == {"rank", "tied_count", "signal", "item"}
     assert row["rank"] == 1 and row["signal"] == "买入"
     assert row["item"]["code"] == "600036" and row["item"]["total"] == 85.0
+    assert data["stocks"][0]["item"]["holding"] == {"cost": 32.5, "pnl_pct": -20.0}
     assert "funds" not in data
     # txt 为报告原文
     assert txt_path.read_text(encoding="utf-8") == _scan()["report"]
@@ -102,6 +104,10 @@ def test_write_snapshot_normalizes_numpy_values(tmp_path):
     scan["stock_results"][0]["sustainability"] = {
         "interest_cover": np.float64(np.nan)
     }
+    scan["stock_results"][0]["holding"] = {
+        "cost": np.float64(32.5),
+        "pnl_pct": np.float64(-20.0),
+    }
     scan["market"]["index_pe_position"] = np.int64(42)
 
     write_snapshot(scan, tmp_path)
@@ -111,6 +117,8 @@ def test_write_snapshot_normalizes_numpy_values(tmp_path):
     assert item["values"]["pe_vs_industry"] == -12.5
     assert isinstance(item["values"]["pe_vs_industry"], float)
     assert item["sustainability"]["interest_cover"] is None  # NaN → None
+    assert item["holding"] == {"cost": 32.5, "pnl_pct": -20.0}
+    assert isinstance(item["holding"]["pnl_pct"], float)
     assert data["market"]["index_pe_position"] == 42
     assert isinstance(data["market"]["index_pe_position"], int)
 

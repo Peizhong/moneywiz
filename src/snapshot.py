@@ -18,7 +18,7 @@ import numpy as np
 
 from src.reporter import ranked_rows
 
-SNAPSHOT_SCHEMA = 2  # 快照 JSON 结构版本：改字段时必须升版本
+SNAPSHOT_SCHEMA = 3  # 快照 JSON 结构版本：改字段时必须升版本
 
 
 def _native(value):
