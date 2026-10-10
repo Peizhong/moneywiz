@@ -1,4 +1,4 @@
-"""终端输出层（纯函数）：把打分结果渲染成股票表、基金表和摘要行。
+"""终端输出层（纯函数）：把打分结果渲染成股票表和摘要行。
 
 消费 main.py 组装好的 result dict，用 tabulate 对齐输出；不联网、不读文件、
 不 import akshare。
@@ -28,11 +28,6 @@ INDICATOR_LABELS: dict[str, str] = {
     "momentum_5d": "5日动量",
     "volatility": "波动率",
     "max_drawdown": "最大回撤",
-    "discount_rate": "折溢价",
-    "nav_trend_20d": "净值趋势",
-    "index_pe_vs_history": "指数估值",
-    "dividend_frequency": "分红频率",
-    "fund_size": "基金规模",
 }
 
 # 亮点/风险里的数值格式（指标单位各不相同；格式化失败时仅显示指标名）
@@ -48,11 +43,6 @@ INDICATOR_VALUE_FORMATS: dict[str, str] = {
     "momentum_5d": "{:+.1f}%",
     "volatility": "{:.1f}%",
     "max_drawdown": "{:.1f}%",
-    "discount_rate": "{:+.2f}%",
-    "nav_trend_20d": "{:+.1f}%",
-    "index_pe_vs_history": "{:.0f}%",
-    "dividend_frequency": "{:.0f}次",
-    "fund_size": "{:.0f}亿",
 }
 
 # 120 日区间分位（calc_price_position）并入亮点/风险的阈值
@@ -63,7 +53,6 @@ POSITION_HIGH = 70.0
 TURNOVER_LOW_DEFAULT = 5000.0  # 近 60 日均成交额 < 该值（万元）→ 风险列提示
 
 STOCK_HEADER = "【股票】"
-FUND_HEADER = "【基金】"
 EMPTY_SECTION = "(无)"
 NO_SCORE_SIGNAL = "数据不足"
 COLUMNS = ["排名", "代码", "名称", "总分", "覆盖", "信号", "亮点", "风险", "技术"]
@@ -103,7 +92,7 @@ def _signals(
         if rank <= buy_top_n:
             # 买入区内的非高位已在上方取走「买入」，到这里只可能是被高位剥夺的
             # 标的 → 观察。不落入末位区：表内标的少于 avoid_bottom_n 时末位区会
-            # 覆盖全表（如仅 1 只基金、avoid=5），否则会被误标「末位」。
+            # 覆盖全表（如表内仅 1 只标的、avoid=5），否则会被误标「末位」。
             signals.append("观察")
             continue
         if rank > total_count - avoid_bottom_n:
@@ -115,29 +104,27 @@ def _signals(
 
 def render_report(
     stock_results: list[dict],
-    fund_results: list[dict],
     output_cfg: dict,
     elapsed_s: float,
     market: dict | None = None,
     risk_hints: dict | None = None,
     position_window: int = 120,
 ) -> str:
-    """渲染完整报告：板块温度计（可选）、股票表、基金表、摘要行，以换行连接。
+    """渲染完整报告：板块温度计（可选）、股票表、摘要行，以换行连接。
 
     ``position_window`` 只用于位置短语的窗口文案（来自 ``data.kline_days``），
     带默认值以保证既有调用方无需改动。
     """
-    all_results = (*stock_results, *fund_results)
-    total = len(all_results)
-    no_score = sum(1 for r in all_results if r["total"] is None)
+    total = len(stock_results)
+    no_score = sum(1 for r in stock_results if r["total"] is None)
     partial = sum(
         1
-        for r in all_results
+        for r in stock_results
         if r["total"] is not None and (r.get("missing") or [])
     )
     summary = (
-        f"扫描 {total} 只标的（股票 {len(stock_results)} / 基金 {len(fund_results)}），"
-        f"数据不足 {no_score}，指标不全 {partial}，耗时 {elapsed_s:.1f}s"
+        f"扫描 {total} 只股票，数据不足 {no_score}，指标不全 {partial}，"
+        f"耗时 {elapsed_s:.1f}s"
     )
     blocks = []
     market_text = _market_text(market) if market else ""
@@ -153,14 +140,6 @@ def render_report(
                 risk_hints,
                 position_window,
                 position_basis="全收益",
-            ),
-            FUND_HEADER,
-            # 基金位置由不复权净值/价格序列算出 → 不加口径词（见 _position_phrases）
-            _table(
-                fund_results,
-                output_cfg,
-                position_window=position_window,
-                position_basis="",
             ),
             summary,
         ]
@@ -195,7 +174,7 @@ def _table(
     """把一张表渲染成 tabulate 文本；无标的时给出占位符。
 
     ``position_window`` 与 ``position_basis`` 透传给位置短语（只影响文案）。
-    口径词随表而异——股票「全收益」、基金空串，见 ``_position_phrases``。
+    口径词固定「全收益」，见 ``_position_phrases``。
     """
     if not results:
         return EMPTY_SECTION
@@ -532,16 +511,10 @@ def _position_phrases(
     非法值（非 int、``bool``、≤0）兜底为 120——排除 ``bool`` 是因为 ``True``
     也是 ``int`` 的实例，不排除会静默渲染成「1日」。
 
-    ``basis`` 是口径词，**股票与基金不同，两张表各自传入**：
-
-    - 股票传「全收益」：``position`` 由**前复权** K 线算出，除息不是损失（钱以
-      分红形式拿到），且与最大回撤的含分红总回报口径一致。这与波动率、最大
-      回撤、股息率历史分位所用的**不复权**帧不同——四处取数分工是有意的，不是
-      待统一的疏漏，理由见 plan 的「关键口径决策」第 5 条。
-    - 基金传空串：``position`` 来自 ``get_fund_nav_history`` 的**不复权**序列
-      （ETF/LOF 是交易所收盘价，``normal`` 型是单位净值，除息日同样下跌），
-      **不是**总回报口径。任何单一实词对两类基金都不成立，故不加口径词——
-      绝不能照抄股票的「全收益」，那是与该序列不符的声明。
+    ``basis`` 是口径词，固定「全收益」：``position`` 由**前复权** K 线算出，除息
+    不是损失（钱以分红形式拿到），且与最大回撤的含分红总回报口径一致。这与波动率、
+    最大回撤、股息率历史分位所用的**不复权**帧不同——四处取数分工是有意的，不是
+    待统一的疏漏，理由见 plan 的「关键口径决策」第 5 条。
     """
     if isinstance(window, bool) or not isinstance(window, int) or window <= 0:
         window = 120

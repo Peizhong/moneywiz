@@ -24,7 +24,6 @@ RULES_SECTION = {
 }
 
 STOCK_HEADER = "【股票】"
-FUND_HEADER = "【基金】"
 
 
 def _result(code, name, total, scores, missing=None, tech=None):
@@ -67,16 +66,6 @@ STOCK_NONE = _result(
     missing=["dividend_yield", "dividend_years"],
     tech=None,
 )
-# 基金 result 依契约不含 tech 键（仅股票有）
-FUND_70 = {
-    "code": "510880",
-    "name": "红利ETF",
-    "total": 70.0,
-    "values": {},
-    "scores": {"discount_rate": 1.0, "index_pe_vs_history": 0.0},
-    "missing": [],
-}
-
 STOCK_PARTIAL = _result(
     "000002",
     "部分覆盖",
@@ -120,20 +109,6 @@ STOCK_UNSCORED = _result(
         "momentum_5d",
     ],
 )
-FUND_UNSCORED = {
-    "code": "510881",
-    "name": "无分基金",
-    "total": None,
-    "values": {},
-    "scores": {},
-    "missing": [
-        "discount_rate",
-        "nav_trend_20d",
-        "index_pe_vs_history",
-        "dividend_frequency",
-        "fund_size",
-    ],
-}
 
 
 def _table_rows(report, header):
@@ -143,7 +118,7 @@ def _table_rows(report, header):
     rows = []
     for line in lines[start:]:
         stripped = line.strip()
-        if stripped in (STOCK_HEADER, FUND_HEADER) or stripped.startswith("扫描"):
+        if stripped == STOCK_HEADER or stripped.startswith("扫描"):
             break
         if not stripped or stripped.startswith("排名") or set(stripped) <= set("- "):
             continue
@@ -197,7 +172,7 @@ def test_signals_rank_boundaries(
 
 
 def test_render_report_stock_table_order_signals_and_labels():
-    report = render_report([STOCK_40, STOCK_NONE, STOCK_80], [FUND_70], OUTPUT_CFG, 3.2)
+    report = render_report([STOCK_40, STOCK_NONE, STOCK_80], OUTPUT_CFG, 3.2)
 
     stock_rows = _table_rows(report, STOCK_HEADER)
     assert len(stock_rows) == 3
@@ -216,21 +191,8 @@ def test_render_report_stock_table_order_signals_and_labels():
     assert "数据不足" in last
 
 
-def test_render_report_fund_table_and_summary():
-    report = render_report([STOCK_40, STOCK_NONE, STOCK_80], [FUND_70], OUTPUT_CFG, 3.2)
-
-    fund_rows = _table_rows(report, FUND_HEADER)
-    assert len(fund_rows) == 1
-    assert "510880" in fund_rows[0] and "红利ETF" in fund_rows[0]
-    assert "70.0" in fund_rows[0]
-
-    assert "扫描 4 只标的（股票 3 / 基金 1）" in report
-    assert "数据不足 1" in report
-    assert "耗时 3.2s" in report
-
-
 def test_render_report_partial_coverage_disclosed():
-    report = render_report([STOCK_PARTIAL], [], OUTPUT_CFG, 1.0)
+    report = render_report([STOCK_PARTIAL], OUTPUT_CFG, 1.0)
 
     row = _table_rows(report, STOCK_HEADER)[0]
     assert "87.5" in row and "1/7" in row
@@ -238,7 +200,7 @@ def test_render_report_partial_coverage_disclosed():
 
 
 def test_render_report_full_coverage_has_no_partial_count():
-    report = render_report([STOCK_FULL], [], OUTPUT_CFG, 1.0)
+    report = render_report([STOCK_FULL], OUTPUT_CFG, 1.0)
 
     row = _table_rows(report, STOCK_HEADER)[0]
     assert "50.0" in row and "7/7" in row
@@ -246,14 +208,12 @@ def test_render_report_full_coverage_has_no_partial_count():
 
 
 def test_render_report_unscored_coverage_is_zero_of_all():
-    report = render_report([STOCK_UNSCORED], [FUND_UNSCORED], OUTPUT_CFG, 0.0)
+    report = render_report([STOCK_UNSCORED], OUTPUT_CFG, 0.0)
 
     stock_row = _table_rows(report, STOCK_HEADER)[0]
-    fund_row = _table_rows(report, FUND_HEADER)[0]
     assert "N/A" in stock_row and "0/7" in stock_row
-    assert "N/A" in fund_row and "0/5" in fund_row
     # 完全不可评分的标的不计入「指标不全」，只计入「数据不足」
-    assert "数据不足 2" in report
+    assert "数据不足 1" in report
     assert "指标不全 0" in report
 
 
@@ -262,7 +222,7 @@ def test_render_report_sorts_none_last_and_ties_by_code():
     tied_low = _result("000001", "甲", 40.0, scores={"dividend_yield": 0.5})
     no_score = _result("300750", "丙", None, scores={})
 
-    report = render_report([no_score, tied_high, tied_low], [], OUTPUT_CFG, 1.0)
+    report = render_report([no_score, tied_high, tied_low], OUTPUT_CFG, 1.0)
 
     rows = _table_rows(report, STOCK_HEADER)
     assert "000001" in rows[0]
@@ -276,7 +236,7 @@ def test_ties_share_rank_and_boundary_signal():
         _result(f"60{i:04d}", f"股{i}", 96.7, scores={"dividend_yield": 1.0})
         for i in range(1, 7)
     ]
-    report = render_report(results, [], {"buy_top_n": 5, "avoid_bottom_n": 1}, 0.0)
+    report = render_report(results, {"buy_top_n": 5, "avoid_bottom_n": 1}, 0.0)
 
     rows = _table_rows(report, STOCK_HEADER)
     assert all("并列6" in row for row in rows)
@@ -290,7 +250,7 @@ def test_high_position_stock_not_marked_buy_and_slot_passes_down():
     ]
     results[4]["position"] = 89.0  # 第 5 名处于 120 日高位
 
-    report = render_report(results, [], {"buy_top_n": 5, "avoid_bottom_n": 1}, 0.0)
+    report = render_report(results, {"buy_top_n": 5, "avoid_bottom_n": 1}, 0.0)
 
     rows = _table_rows(report, STOCK_HEADER)
     assert "买入" in rows[0] and "买入" in rows[3]
@@ -312,7 +272,7 @@ def test_high_position_extension_keeps_tie_group_whole():
     ]
     results[4]["position"] = 89.0
 
-    report = render_report(results, [], {"buy_top_n": 5, "avoid_bottom_n": 1}, 0.0)
+    report = render_report(results, {"buy_top_n": 5, "avoid_bottom_n": 1}, 0.0)
 
     rows = _table_rows(report, STOCK_HEADER)
     assert "观察" in rows[4] and "买入" not in rows[4]
@@ -328,7 +288,7 @@ def test_high_position_in_bottom_zone_still_marked_avoid():
     ]
     results[5]["position"] = 95.0  # 末位区且高位
 
-    report = render_report(results, [], {"buy_top_n": 5, "avoid_bottom_n": 1}, 0.0)
+    report = render_report(results, {"buy_top_n": 5, "avoid_bottom_n": 1}, 0.0)
 
     rows = _table_rows(report, STOCK_HEADER)
     assert "末位" in rows[5]  # 高位不影响末位判定
@@ -336,12 +296,12 @@ def test_high_position_in_bottom_zone_still_marked_avoid():
 
 
 def test_high_position_row_with_oversized_avoid_zone_stays_watch():
-    # 表内标的少于 avoid_bottom_n（如仅 1 只基金、avoid=5）：末位区覆盖全表，
+    # 表内标的少于 avoid_bottom_n（如表内仅 1 只标的、avoid=5）：末位区覆盖全表，
     # 高位被剥夺「买入」的标的应落为「观察」，不能误标「末位」
-    item = _result("510880", "红利ETF", 67.5, scores={"dividend_yield": 1.0})
+    item = _result("600036", "招商银行", 67.5, scores={"dividend_yield": 1.0})
     item["position"] = 78.0
 
-    report = render_report([item], [], {"buy_top_n": 5, "avoid_bottom_n": 5}, 0.0)
+    report = render_report([item], {"buy_top_n": 5, "avoid_bottom_n": 5}, 0.0)
 
     rows = _table_rows(report, STOCK_HEADER)
     assert "观察" in rows[0] and "末位" not in rows[0]
@@ -354,7 +314,7 @@ def test_buy_eligibility_uses_same_threshold_as_high_position_phrase():
     below["position"] = 69.9
 
     report = render_report(
-        [at_threshold, below], [], {"buy_top_n": 5, "avoid_bottom_n": 0}, 0.0
+        [at_threshold, below], {"buy_top_n": 5, "avoid_bottom_n": 0}, 0.0
     )
 
     rows = _table_rows(report, STOCK_HEADER)
@@ -368,7 +328,7 @@ def test_competition_rank_skips_after_tie_group():
         _result("000002", "乙", 90.0, scores={"dividend_yield": 1.0}),
         _result("000003", "丙", 30.0, scores={"dividend_yield": 0.0}),
     ]
-    report = render_report(results, [], {"buy_top_n": 5, "avoid_bottom_n": 5}, 0.0)
+    report = render_report(results, {"buy_top_n": 5, "avoid_bottom_n": 5}, 0.0)
 
     rows = _table_rows(report, STOCK_HEADER)
     assert "1(并列2)" in rows[0] and "1(并列2)" in rows[1]
@@ -382,7 +342,7 @@ def test_render_report_uses_output_cfg_thresholds():
         _result("000003", "丙", 30.0, scores={"dividend_yield": 0.0}),
     ]
 
-    report = render_report(results, [], {"buy_top_n": 1, "avoid_bottom_n": 1}, 0.0)
+    report = render_report(results, {"buy_top_n": 1, "avoid_bottom_n": 1}, 0.0)
 
     rows = _table_rows(report, STOCK_HEADER)
     assert "买入" in rows[0]
@@ -395,7 +355,7 @@ def test_render_report_none_scores_render_dashes():
     # 契约允许 scores 为 None（如拉取失败），亮点/风险/技术均为 "-"
     item = _result("000001", "甲", None, scores=None)
 
-    report = render_report([item], [], OUTPUT_CFG, 0.0)
+    report = render_report([item], OUTPUT_CFG, 0.0)
 
     row = _table_rows(report, STOCK_HEADER)[0]
     assert row.split()[-3:] == ["-", "-", "-"]
@@ -403,13 +363,11 @@ def test_render_report_none_scores_render_dashes():
 
 
 def test_render_report_empty_lists_render_placeholders():
-    report = render_report([], [], OUTPUT_CFG, 0.0)
+    report = render_report([], OUTPUT_CFG, 0.0)
 
     assert STOCK_HEADER in report
-    assert FUND_HEADER in report
     assert "(无)" in report
-    assert "扫描 0 只标的（股票 0 / 基金 0）" in report
-    assert "数据不足 0" in report
+    assert "扫描 0 只股票，数据不足 0" in report
 
 
 def _detailed_result(position):
@@ -429,7 +387,7 @@ def _detailed_result(position):
 
 
 def test_highlights_and_risks_include_values_and_low_position():
-    report = render_report([_detailed_result(23.4)], [], OUTPUT_CFG, 1.0)
+    report = render_report([_detailed_result(23.4)], OUTPUT_CFG, 1.0)
 
     row = _table_rows(report, STOCK_HEADER)[0]
     assert "股息率 4.5%" in row  # 亮点带数值
@@ -440,17 +398,17 @@ def test_highlights_and_risks_include_values_and_low_position():
 
 def test_high_and_middle_position_phrases():
     row = _table_rows(
-        render_report([_detailed_result(82.2)], [], OUTPUT_CFG, 1.0), STOCK_HEADER
+        render_report([_detailed_result(82.2)], OUTPUT_CFG, 1.0), STOCK_HEADER
     )[0]
     assert "120日全收益高位 82%" in row  # 高位并入风险文字
 
     row = _table_rows(
-        render_report([_detailed_result(55.0)], [], OUTPUT_CFG, 1.0), STOCK_HEADER
+        render_report([_detailed_result(55.0)], OUTPUT_CFG, 1.0), STOCK_HEADER
     )[0]
     assert "120日全收益中位 55%" in row
 
     row = _table_rows(
-        render_report([_detailed_result(None)], [], OUTPUT_CFG, 1.0), STOCK_HEADER
+        render_report([_detailed_result(None)], OUTPUT_CFG, 1.0), STOCK_HEADER
     )[0]
     assert "全收益" not in row  # 无 K 线数据时不显示位置
 
@@ -471,7 +429,7 @@ def test_sustainability_warnings_join_risk_column():
         {"key": "cash_cover", "dimension": "coverage", "value": 200.4, "penalty": 10.0},
     ]
 
-    row = _table_rows(render_report([result], [], OUTPUT_CFG, 1.0), STOCK_HEADER)[0]
+    row = _table_rows(render_report([result], OUTPUT_CFG, 1.0), STOCK_HEADER)[0]
 
     assert "盈利下滑 13%" in row
     assert "分红超现金流 200%" in row
@@ -484,7 +442,7 @@ def test_sustainability_phrase_includes_report_period_label():
         {"key": "eps_decline", "dimension": "profit", "value": -12.9, "penalty": 5.0},
     ]
 
-    row = _table_rows(render_report([result], [], OUTPUT_CFG, 1.0), STOCK_HEADER)[0]
+    row = _table_rows(render_report([result], OUTPUT_CFG, 1.0), STOCK_HEADER)[0]
 
     assert "盈利下滑 13%（2026中报）" in row
 
@@ -543,7 +501,7 @@ def test_risk_column_holds_six_items():
     result["turnover_wan"] = 1200.0  # < turnover_low(5000) → 流动性提示
 
     row = _table_rows(
-        render_report([result], [], OUTPUT_CFG, 1.0, risk_hints={"turnover_low": 5000}),
+        render_report([result], OUTPUT_CFG, 1.0, risk_hints={"turnover_low": 5000}),
         STOCK_HEADER,
     )[0]
 
@@ -559,7 +517,7 @@ def test_sustainability_none_renders_no_warning():
     result["sustainability"] = None
     result.pop("sustainability_flags", None)
 
-    report = render_report([result], [], OUTPUT_CFG, 1.0)
+    report = render_report([result], OUTPUT_CFG, 1.0)
     detail = render_detail(ranked_rows([result], OUTPUT_CFG)[0], RULES_SECTION)
 
     assert "盈利下滑" not in report and "利息保障" not in report
@@ -573,7 +531,7 @@ def test_dividend_yield_percentile_highlight_and_risk_text():
     bad = _result("600101", "乙", 40.0, scores={"dividend_yield_percentile": 0.0})
     bad["values"] = {"dividend_yield_percentile": 12.0}
 
-    report = render_report([good, bad], [], OUTPUT_CFG, 0.0)
+    report = render_report([good, bad], OUTPUT_CFG, 0.0)
 
     rows = _table_rows(report, STOCK_HEADER)
     assert "股息率分位 92%" in rows[0]  # 满分档 → 亮点
@@ -598,7 +556,7 @@ def test_risk_hint_for_low_turnover():
     result["turnover_wan"] = 3200.0
 
     report = render_report(
-        [result], [], OUTPUT_CFG, 1.0, risk_hints={"turnover_low": 5000}
+        [result], OUTPUT_CFG, 1.0, risk_hints={"turnover_low": 5000}
     )
 
     row = _table_rows(report, STOCK_HEADER)[0]
@@ -610,7 +568,7 @@ def test_risk_hint_respects_turnover_threshold_and_large_amount_scale():
     result["turnover_wan"] = 15000.0
 
     report = render_report(
-        [result], [], OUTPUT_CFG, 1.0, risk_hints={"turnover_low": 20000}
+        [result], OUTPUT_CFG, 1.0, risk_hints={"turnover_low": 20000}
     )
 
     row = _table_rows(report, STOCK_HEADER)[0]
@@ -627,7 +585,7 @@ def test_stability_tiers_show_in_highlight_and_risk_columns():
     )
     wild["values"] = {"volatility": 51.0, "max_drawdown": 47.4}
 
-    report = render_report([calm, wild], [], OUTPUT_CFG, 1.0)
+    report = render_report([calm, wild], OUTPUT_CFG, 1.0)
 
     rows = _table_rows(report, STOCK_HEADER)
     assert "波动率 13.3%" in rows[0]  # 满分档 → 亮点
@@ -643,7 +601,7 @@ def test_negative_operating_cash_flow_warning():
         {"key": "negative_cash", "dimension": "cashflow", "value": -0.2, "penalty": 15.0},
     ]
 
-    row = _table_rows(render_report([result], [], OUTPUT_CFG, 1.0), STOCK_HEADER)[0]
+    row = _table_rows(render_report([result], OUTPUT_CFG, 1.0), STOCK_HEADER)[0]
 
     assert "经营现金流为负" in row
     assert "盈利下滑" not in row  # 盈利为正 → 判定层不出 profit 红标 → 展示层不得凭空提示
@@ -663,7 +621,7 @@ def test_display_layer_renders_flags_only_never_rejudges_thresholds():
     }
     result["sustainability_flags"] = []
 
-    row = _table_rows(render_report([result], [], OUTPUT_CFG, 1.0), STOCK_HEADER)[0]
+    row = _table_rows(render_report([result], OUTPUT_CFG, 1.0), STOCK_HEADER)[0]
     detail = render_detail(ranked_rows([result], OUTPUT_CFG)[0], RULES_SECTION)
 
     assert "可持续性扣分" in detail  # 防惰性：确实走到了读 flags 的扣分链
@@ -677,17 +635,17 @@ def test_new_constituent_marker_in_name():
     result = _result("601088", "中国神华", 80.0, scores={"dividend_yield": 1.0})
     result["new_constituent"] = True
 
-    row = _table_rows(render_report([result], [], OUTPUT_CFG, 1.0), STOCK_HEADER)[0]
+    row = _table_rows(render_report([result], OUTPUT_CFG, 1.0), STOCK_HEADER)[0]
 
     assert "中国神华(新增)" in row
 
     result["new_constituent"] = False
-    row = _table_rows(render_report([result], [], OUTPUT_CFG, 1.0), STOCK_HEADER)[0]
+    row = _table_rows(render_report([result], OUTPUT_CFG, 1.0), STOCK_HEADER)[0]
     assert "中国神华" in row and "(新增)" not in row
 
 
 def test_market_header_rendered_before_tables():
-    report = render_report([STOCK_80], [], OUTPUT_CFG, 1.0, market=MARKET)
+    report = render_report([STOCK_80], OUTPUT_CFG, 1.0, market=MARKET)
 
     assert "【板块温度计】" in report
     assert "中证红利股息率 4.14%" in report
@@ -698,19 +656,19 @@ def test_market_header_rendered_before_tables():
 
 
 def test_market_header_absent_without_market():
-    report = render_report([STOCK_80], [], OUTPUT_CFG, 1.0)
+    report = render_report([STOCK_80], OUTPUT_CFG, 1.0)
 
     assert "【板块温度计】" not in report
 
 
 def test_market_header_skips_missing_fields():
     partial = dict(MARKET, bond_10y=None, spread=None, index_pe_position=None)
-    report = render_report([STOCK_80], [], OUTPUT_CFG, 1.0, market=partial)
+    report = render_report([STOCK_80], OUTPUT_CFG, 1.0, market=partial)
     assert "中证红利股息率 4.14%" in report
     assert "10Y国债" not in report and "利差" not in report
 
     empty = {key: None for key in MARKET}
-    report = render_report([STOCK_80], [], OUTPUT_CFG, 1.0, market=empty)
+    report = render_report([STOCK_80], OUTPUT_CFG, 1.0, market=empty)
     assert "【板块温度计】" not in report
 
 
@@ -725,7 +683,6 @@ def test_detail_falls_back_to_label_without_value():
     )
     # 未知指标名与非法数值都不抛异常
     assert _detail_text({"custom_x": 1.0}, {"custom_x": 3}, 1.0) == "custom_x"
-    assert _detail_text({"fund_size": 1.0}, {"fund_size": "n/a"}, 1.0) == "基金规模"
 
 
 # ---------------------------------------------------------------------------
@@ -905,33 +862,10 @@ def test_render_report_takes_position_window():
     result["position"] = 82.0
 
     row = _table_rows(
-        render_report([result], [], OUTPUT_CFG, 1.0, position_window=60), STOCK_HEADER
+        render_report([result], OUTPUT_CFG, 1.0, position_window=60), STOCK_HEADER
     )[0]
     assert "60日全收益高位 82%" in row
 
     # 不传则走默认值，既有调用方无需改动
-    row = _table_rows(render_report([result], [], OUTPUT_CFG, 1.0), STOCK_HEADER)[0]
+    row = _table_rows(render_report([result], OUTPUT_CFG, 1.0), STOCK_HEADER)[0]
     assert "120日全收益高位 82%" in row
-
-
-def test_fund_position_phrase_does_not_claim_total_return():
-    """基金 position 来自不复权净值/价格序列（main.py:422），不得声称「全收益」。"""
-    fund = dict(FUND_70, position=82.0)
-
-    row = _table_rows(render_report([], [fund], OUTPUT_CFG, 1.0), FUND_HEADER)[0]
-
-    assert "120日高位 82%" in row
-    assert "全收益" not in row
-
-
-def test_stock_and_fund_tables_use_their_own_position_basis():
-    """同一份报告里两张表的口径词各自正确，互不串味。"""
-    stock = _result("600036", "招商银行", 80.0, scores={"dividend_yield": 1.0})
-    stock["position"] = 82.0
-    fund = dict(FUND_70, position=18.0)
-
-    report = render_report([stock], [fund], OUTPUT_CFG, 1.0)
-
-    assert "120日全收益高位 82%" in _table_rows(report, STOCK_HEADER)[0]
-    assert "120日低位 18%" in _table_rows(report, FUND_HEADER)[0]
-    assert "全收益" not in _table_rows(report, FUND_HEADER)[0]

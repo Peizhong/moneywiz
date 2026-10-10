@@ -18,9 +18,9 @@ AS_OF = date(2026, 10, 10)
 
 
 def _scan(**overrides):
-    """最小合法的 run_scan 返回值（含快照专用四键）。"""
+    """最小合法的 run_scan 返回值（含快照专用三键）。"""
     scan = {
-        "report": "扫描 1 只标的（股票 1 / 基金 0），数据不足 0，耗时 1.0s",
+        "report": "扫描 1 只股票，数据不足 0，耗时 1.0s",
         "stock_results": [
             {
                 "code": "600036",
@@ -36,7 +36,6 @@ def _scan(**overrides):
                 "turnover_wan": None,
             }
         ],
-        "fund_results": [],
         "rules": {"stocks": {"indicators": {}}},
         "output": {"buy_top_n": 5, "avoid_bottom_n": 5},
         "market": {
@@ -61,7 +60,7 @@ def test_write_snapshot_creates_json_and_txt(tmp_path):
     assert json_path.is_file() and txt_path.is_file()
 
     data = json.loads(json_path.read_text(encoding="utf-8"))
-    assert data["schema"] == 1
+    assert data["schema"] == 2
     assert data["as_of"] == "2026-10-10"
     assert "created_at" in data
     assert data["elapsed_s"] == 1.5
@@ -71,7 +70,7 @@ def test_write_snapshot_creates_json_and_txt(tmp_path):
     assert set(row) == {"rank", "tied_count", "signal", "item"}
     assert row["rank"] == 1 and row["signal"] == "买入"
     assert row["item"]["code"] == "600036" and row["item"]["total"] == 85.0
-    assert data["funds"] == []
+    assert "funds" not in data
     # txt 为报告原文
     assert txt_path.read_text(encoding="utf-8") == _scan()["report"]
 
@@ -118,9 +117,7 @@ def test_write_snapshot_normalizes_numpy_values(tmp_path):
 
 def _scan_stub():
     """与 _scan 同构；CLI 不依赖实现细节，单独构造。"""
-    return _scan(
-        report="【股票】\n扫描 1 只标的（股票 1 / 基金 0），数据不足 0，耗时 1.0s"
-    )
+    return _scan(report="【股票】\n扫描 1 只股票，数据不足 0，耗时 1.0s")
 
 
 def test_snapshot_cli_writes_snapshot_and_prints_path(monkeypatch, tmp_path, capsys):
@@ -131,7 +128,7 @@ def test_snapshot_cli_writes_snapshot_and_prints_path(monkeypatch, tmp_path, cap
     assert (tmp_path / "2026-10-10.json").is_file()
     captured = capsys.readouterr()
     assert str(tmp_path / "2026-10-10.json") in captured.out
-    assert "扫描 1 只标的" in captured.out  # 摘要行
+    assert "扫描 1 只股票" in captured.out  # 摘要行
 
 
 def test_snapshot_cli_config_error_returns_one_without_snapshot(

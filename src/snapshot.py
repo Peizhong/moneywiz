@@ -18,7 +18,7 @@ import numpy as np
 
 from src.reporter import ranked_rows
 
-SNAPSHOT_SCHEMA = 1  # 快照 JSON 结构版本：改字段时必须升版本
+SNAPSHOT_SCHEMA = 2  # 快照 JSON 结构版本：改字段时必须升版本
 
 
 def _native(value):
@@ -47,8 +47,8 @@ def _atomic_write(path: Path, content: str) -> None:
 def write_snapshot(scan: dict, snapshot_dir: Path) -> Path:
     """把 run_scan() 的结果写成 YYYY-MM-DD.{json,txt} 两份快照，同日覆盖。
 
-    ``scan`` 是 main.run_scan 的返回值（含 market/fund_results/elapsed/as_of
-    四个快照专用键）。返回 JSON 文件路径。
+    ``scan`` 是 main.run_scan 的返回值（含 market/elapsed/as_of
+    三个快照专用键）。返回 JSON 文件路径。
     """
     snapshot_dir = Path(snapshot_dir)
     snapshot_dir.mkdir(parents=True, exist_ok=True)
@@ -61,9 +61,6 @@ def write_snapshot(scan: dict, snapshot_dir: Path) -> Path:
         "market": _native(scan["market"]),
         "stocks": [
             _native(row) for row in ranked_rows(scan["stock_results"], scan["output"])
-        ],
-        "funds": [
-            _native(row) for row in ranked_rows(scan["fund_results"], scan["output"])
         ],
     }
     json_path = snapshot_dir / f"{day}.json"

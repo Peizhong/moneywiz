@@ -180,14 +180,6 @@ def _log_candidate_selection(selection: dict, limit: int) -> None:
         )
 
 
-def _quote_row(quotes, code):
-    """基金行情表中该代码的行；表缺失、为空或无该行 → None。"""
-    if quotes is None or quotes.empty:
-        return None
-    matched = quotes.loc[quotes["code"] == code]
-    return None if matched.empty else matched.iloc[0]
-
-
 def _stock_result(
     stock,
     spot,
@@ -301,20 +293,6 @@ def _sustainability(code, dividends, as_of, cache_dir, financial_cache_days):
     }
 
 
-def _fetch_fund_quotes(cfg_funds):
-    """按类型拉取一次基金行情表（normal 无行情表，不请求）。"""
-    quotes = {}
-    for fund_type in sorted({fund.type for fund in cfg_funds}):
-        if fund_type == "normal":
-            continue
-        codes = [fund.code for fund in cfg_funds if fund.type == fund_type]
-        quotes[fund_type] = _fetch(
-            lambda t=fund_type, c=codes: data.get_fund_quotes(t, c),
-            f"get_fund_quotes({fund_type})",
-        )
-    return quotes
-
-
 def _scan_stocks(watchlist, constituent_entries):
     """扫描清单 = 自选 ∪ 成分股（按代码去重；自选优先，保留其名称）。"""
     stocks = list(watchlist)
@@ -356,73 +334,6 @@ def _market_context():
     }
 
 
-def _fund_result(fund, quotes, as_of, kline_days, rules_section):
-    """组装一只基金：每个数据源独立降级，任一失败只影响对应指标。"""
-    row = _quote_row(quotes, fund.code)
-    if quotes is not None and row is None:
-        logger.warning("基金 %s 不在 %s 行情表中，价格按缺失处理", fund.code, fund.type)
-    price = _num(row["price"]) if row is not None else None
-
-    if fund.type == "etf":
-        nav = _num(row["iopv"]) if row is not None else None
-    else:
-        nav = None  # LOF 稍后用最新净值；场外基金不可评分
-
-    if fund.type in ("etf", "lof") and nav is None:
-        # LOF，或 ETF 无 IOPV（腾讯回退路径）→ 用最新单位净值做日频折溢价代理
-        nav = _num(
-            _fetch(
-                lambda: data.get_fund_latest_nav(fund.code),
-                f"get_fund_latest_nav({fund.code})",
-            )
-        )
-
-    nav_history = _fetch(
-        lambda: data.get_fund_nav_history(fund.code, fund.type, days=kline_days),
-        f"get_fund_nav_history({fund.code})",
-    )
-    dividend_history = _fetch(
-        lambda: data.get_fund_dividend_history(fund.code),
-        f"get_fund_dividend_history({fund.code})",
-    )
-    overview = _fetch(
-        lambda: data.get_fund_overview(fund.code),
-        f"get_fund_overview({fund.code})",
-    )
-    tracker = overview["tracker"] if overview is not None else None
-    scale = overview["scale"] if overview is not None else None
-    index_symbol = _fetch(
-        lambda: data.resolve_index_symbol(fund.index, tracker),
-        f"resolve_index_symbol({fund.code})",
-    )
-    pe_history = (
-        _fetch(
-            lambda: data.get_index_pe_history(index_symbol),
-            f"get_index_pe_history({index_symbol})",
-        )
-        if index_symbol is not None
-        else None
-    )
-
-    values = {
-        "discount_rate": _num(indicators.calc_fund_discount(price, nav)),
-        "nav_trend_20d": _num(indicators.calc_nav_trend(nav_history, days=20)),
-        "index_pe_vs_history": _num(indicators.calc_index_pe_position(pe_history)),
-        "dividend_frequency": _num(
-            indicators.calc_dividend_frequency(dividend_history, as_of)
-        ),
-        "fund_size": _num(indicators.calc_fund_size(scale)),
-    }
-    return _result(
-        fund.code,
-        fund.name,
-        values,
-        rules_section,
-        tech=None,
-        position=_num(indicators.calc_price_position(nav_history)),
-    )
-
-
 def run(
     config_dir: Path = Path("config"),
     cache_dir: Path = Path("cache"),
@@ -437,7 +348,7 @@ def run_scan(
     cache_dir: Path = Path("cache"),
     as_of: date | None = None,
 ) -> dict:
-    """跑一遍筛选，返回 ``{"report", "stock_results", "fund_results", "market", "elapsed", "as_of", "rules", "output"}``。
+    """跑一遍筛选，返回 ``{"report", "stock_results", "market", "elapsed", "as_of", "rules", "output"}``。
 
     比 :func:`run` 多带回交互式详情与快照所需的原始结果（report 之外的部分不被 report 消费）。
     """
@@ -476,7 +387,6 @@ def run_scan(
     )
     _log_candidate_selection(selection, data_cfg["candidate_top_n"])
     scan_stocks = _scan_stocks(cfg.stocks, selection["kept"])
-    fund_quotes = _fetch_fund_quotes(cfg.funds)
     market = _market_context()
 
     stock_results = []
@@ -493,21 +403,10 @@ def run_scan(
         )
         result["new_constituent"] = stock.code in new_codes
         stock_results.append(result)
-    fund_results = [
-        _fund_result(
-            fund,
-            fund_quotes.get(fund.type),
-            as_of,
-            kline_days,
-            cfg.rules["funds"],
-        )
-        for fund in cfg.funds
-    ]
     elapsed = time.monotonic() - started
     return {
         "report": reporter.render_report(
             stock_results,
-            fund_results,
             cfg.output,
             elapsed,
             market=market,
@@ -515,7 +414,6 @@ def run_scan(
             position_window=kline_days,
         ),
         "stock_results": stock_results,
-        "fund_results": fund_results,
         "market": market,
         "elapsed": elapsed,
         "as_of": as_of,

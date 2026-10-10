@@ -83,12 +83,6 @@ DATA_FUNCTIONS = (
     "get_kline_raw",
     "get_dividend_history",
     "get_industry_pe_pb",
-    "get_fund_quotes",
-    "get_fund_nav_history",
-    "get_fund_latest_nav",
-    "get_fund_dividend_history",
-    "get_fund_overview",
-    "resolve_index_symbol",
     "get_index_pe_history",
     "get_index_dividend_yield",
     "get_10y_bond_yield",
@@ -177,18 +171,6 @@ INDUSTRY = {
     STOCK_A: {"industry": "银行", "pe": 10.0, "pb": 1.0},
     STOCK_B: {"industry": "银行", "pe": 10.0, "pb": 1.0},
 }
-FUND_QUOTES = pd.DataFrame(
-    {"code": [FUND_CODE], "name": ["红利ETF"], "price": [3.00], "iopv": [3.05]}
-)
-FUND_NAV = pd.DataFrame(
-    {
-        "date": pd.date_range(end="2026-10-06", periods=25, freq="D"),
-        "close": [1.0] * 5 + [1.0 + 0.0015 * i for i in range(20)],
-    }
-)
-FUND_DIVIDENDS = pd.DataFrame(
-    {"date": pd.to_datetime(["2024-12-12", "2025-11-17", "2026-06-11"])}
-)
 INDEX_PE = pd.DataFrame(
     {
         "date": pd.date_range(end="2026-10-06", periods=11, freq="D"),
@@ -228,14 +210,6 @@ def _happy_overrides(**extra):
             STOCK_B: DIVIDENDS_B,
         }[code],
         "get_industry_pe_pb": lambda code, cache_dir, cache_days=7: INDUSTRY[code],
-        "get_fund_quotes": lambda fund_type, codes: FUND_QUOTES,
-        "get_fund_nav_history": lambda code, fund_type, days=120: FUND_NAV,
-        "get_fund_dividend_history": lambda code: FUND_DIVIDENDS,
-        "get_fund_overview": lambda code: {
-            "scale": "222.76亿元（截止至：2026年06月30日）",
-            "tracker": "上证红利指数",
-        },
-        "resolve_index_symbol": lambda configured, tracker: "上证红利",
         "get_index_pe_history": lambda symbol: INDEX_PE,
         "get_index_dividend_yield": lambda index_code="000922": 4.2,
         "get_10y_bond_yield": lambda: 1.8,
@@ -254,7 +228,7 @@ def _section_rows(report, header):
     rows = []
     for line in lines[lines.index(header) + 1 :]:
         stripped = line.strip()
-        if stripped in ("【股票】", "【基金】") or stripped.startswith("扫描"):
+        if stripped == "【股票】" or stripped.startswith("扫描"):
             break
         if not stripped or stripped.startswith("排名") or set(stripped) <= set("- "):
             continue
@@ -280,12 +254,7 @@ def test_run_happy_path_reports_all_instruments_sorted_by_total(
     assert "平安银行" in stock_rows[0] and "92.5" in stock_rows[0]
     assert "招商银行" in stock_rows[1] and "25.0" in stock_rows[1]
 
-    fund_rows = _section_rows(report, "【基金】")
-    assert len(fund_rows) == 1
-    assert "红利ETF" in fund_rows[0] and "75.0" in fund_rows[0]
-    assert "510880" in fund_rows[0]
-
-    assert "扫描 3 只标的（股票 2 / 基金 1），数据不足 0" in report
+    assert "扫描 2 只股票，数据不足 0" in report
 
 
 def test_run_stock_missing_from_spot_table_still_scored(
@@ -325,7 +294,7 @@ def test_run_kline_failure_keeps_other_indicators_scoring(
     # (0.5×15 + 0.5×10) / (30+20+10+15+10) × 100 = 14.7
     assert "14.7" in row
     assert "N/A" not in row and "数据不足" not in row
-    assert "平安银行" in report and "红利ETF" in report  # 其余标的不受影响
+    assert "平安银行" in report  # 其余标的不受影响
 
 
 def test_run_merges_constituents_and_marks_new(monkeypatch, config_dir, tmp_path):
@@ -340,8 +309,8 @@ def test_run_merges_constituents_and_marks_new(monkeypatch, config_dir, tmp_path
     report = main.run(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
 
     assert "中国神华(新增)" in report  # 新增成分股在报告里带标记
-    # 自选 2 只 + 新成分股 1 只（重叠的平安银行不重复）+ 基金 1 只
-    assert "扫描 4 只标的（股票 3 / 基金 1）" in report
+    # 自选 2 只 + 新成分股 1 只（重叠的平安银行不重复）
+    assert "扫描 3 只股票" in report
     assert report.count("平安银行") == 1
 
 
@@ -791,8 +760,6 @@ def test_run_surfaces_sustainability_warnings(monkeypatch, config_dir, tmp_path)
     assert "盈利下滑 13%（2026中报）" in row
     # TTM 每股分红 1.0 ÷ 每股经营现金流 0.5 = 200%
     assert "分红超现金流 200%" in row
-    other = _row_for(report, "红利ETF")
-    assert "盈利下滑" not in other  # 基金不参与个股财报检查
 
 
 def test_run_includes_market_header(monkeypatch, config_dir, tmp_path):
@@ -840,10 +807,10 @@ def test_run_all_sources_failing_reports_insufficient_data(
 
     report = main.run(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
 
-    for name in ("平安银行", "招商银行", "红利ETF"):
+    for name in ("平安银行", "招商银行"):
         row = _row_for(report, name)
         assert "N/A" in row and "数据不足" in row
-    assert "数据不足 3" in report
+    assert "数据不足 2" in report
     assert "【板块温度计】" not in report  # 温度计数据全部缺失时不显示该行
 
 
@@ -912,7 +879,7 @@ def test_run_resets_quote_source_state(monkeypatch, config_dir, tmp_path):
 
 
 def test_run_passes_data_rules_and_as_of_through(monkeypatch, config_dir, tmp_path):
-    calls = {"kline": [], "industry": [], "nav": [], "quotes": [], "symbol": []}
+    calls = {"kline": [], "industry": []}
 
     def get_kline(code, days=120, as_of=None):
         calls["kline"].append((code, days, as_of))
@@ -922,26 +889,11 @@ def test_run_passes_data_rules_and_as_of_through(monkeypatch, config_dir, tmp_pa
         calls["industry"].append((code, cache_dir, cache_days))
         return {"industry": "银行", "pe": 10.0, "pb": 1.0}
 
-    def get_fund_nav_history(code, fund_type, days=120):
-        calls["nav"].append((code, fund_type, days))
-        return None
-
-    def get_fund_quotes(fund_type, codes):
-        calls["quotes"].append((fund_type, tuple(codes)))
-        return FUND_QUOTES
-
-    def resolve_index_symbol(configured, tracker):
-        calls["symbol"].append((configured, tracker))
-        return None
-
     _patch_data(
         monkeypatch,
         **_happy_overrides(
             get_kline=get_kline,
             get_industry_pe_pb=get_industry_pe_pb,
-            get_fund_nav_history=get_fund_nav_history,
-            get_fund_quotes=get_fund_quotes,
-            resolve_index_symbol=resolve_index_symbol,
         ),
     )
 
@@ -952,48 +904,6 @@ def test_run_passes_data_rules_and_as_of_through(monkeypatch, config_dir, tmp_pa
         (STOCK_A, tmp_path, 7),
         (STOCK_B, tmp_path, 7),
     ]
-    assert calls["nav"] == [(FUND_CODE, "etf", 120)]
-    assert calls["quotes"] == [("etf", (FUND_CODE,))]  # 每种基金类型只拉一次行情
-    assert calls["symbol"] == [("上证红利", "上证红利指数")]
-
-
-def test_run_list_valued_index_degrades_instead_of_aborting(monkeypatch, tmp_path):
-    # 用户把 funds.yaml 的 index 写成多元素列表：真实 resolve_index_symbol 内部
-    # pd.isna 对数组取真值会抛 ValueError，必须被 _fetch 捕获并降级为
-    # 「指数估值缺数据」，其余指标与标的不受影响。
-    funds = {
-        "funds": [
-            {
-                "code": FUND_CODE,
-                "name": "红利ETF",
-                "type": "etf",
-                "index": ["上证红利", "中证红利"],
-            }
-        ]
-    }
-    config_dir = tmp_path / "config"
-    config_dir.mkdir()
-    for filename, payload in (
-        ("stocks.yaml", STOCKS_CONFIG),
-        ("funds.yaml", funds),
-        ("rules.yaml", RULES_CONFIG),
-        ("dividend_index.yaml", CONSTITUENTS_CONFIG),
-    ):
-        (config_dir / filename).write_text(
-            yaml.safe_dump(payload, allow_unicode=True, sort_keys=False),
-            encoding="utf-8",
-        )
-    _patch_data(
-        monkeypatch,
-        **_happy_overrides(resolve_index_symbol=data.resolve_index_symbol),
-    )
-
-    report = main.run(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
-
-    fund_row = _row_for(report, "红利ETF")
-    assert "N/A" not in fund_row  # 指数 PE 之外的 4 个指标仍打分
-    assert "4/5" in fund_row
-    assert "平安银行" in report  # 股票不受基金配置问题影响
 
 
 SCAN_STUB = {
@@ -1090,26 +1000,8 @@ def test_main_reports_config_error_and_returns_one(monkeypatch, capsys):
     assert "stocks.yaml: 配置文件不存在" in captured.err
 
 
-def test_run_etf_discount_falls_back_to_latest_nav(monkeypatch, config_dir, tmp_path):
-    """腾讯回退路径无 IOPV：折溢价用最新单位净值代理（日频口径）。"""
-    quotes_without_iopv = pd.DataFrame(
-        {"code": [FUND_CODE], "name": ["红利ETF"], "price": [1.02], "iopv": [None]}
-    )
-    _patch_data(
-        monkeypatch,
-        **_happy_overrides(
-            get_fund_quotes=lambda fund_type, codes: quotes_without_iopv,
-            get_fund_latest_nav=lambda code: 1.0,
-        ),
-    )
-
-    report = main.run(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
-
-    assert "折溢价 +2.00%" in _row_for(report, "红利ETF")
-
-
 def test_run_scan_exposes_snapshot_fields(monkeypatch, config_dir, tmp_path):
-    """快照入口依赖 run_scan 返回的四个新键：market/fund_results/elapsed/as_of。"""
+    """快照入口依赖 run_scan 返回的三个键：market/elapsed/as_of。"""
     _patch_data(monkeypatch, **_happy_overrides())
 
     scan = main.run_scan(config_dir=config_dir, cache_dir=tmp_path, as_of=AS_OF)
@@ -1119,4 +1011,4 @@ def test_run_scan_exposes_snapshot_fields(monkeypatch, config_dir, tmp_path):
     assert scan["market"]["dividend_yield"] == pytest.approx(4.2)
     assert scan["market"]["bond_10y"] == pytest.approx(1.8)
     assert [r["code"] for r in scan["stock_results"]] == [STOCK_A, STOCK_B]
-    assert [r["code"] for r in scan["fund_results"]] == [FUND_CODE]
+    assert "fund_results" not in scan
