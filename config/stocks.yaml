@@ -20,5 +20,7 @@ stocks:
   name: 浙能电力
 - code: '600690'
   name: '海尔智家'
-- code: '000651'
-  name: '格力电器'
+- code: '000538'
+  name: '云南白药'
+- code: '600519'
+  name: '贵州茅台'
